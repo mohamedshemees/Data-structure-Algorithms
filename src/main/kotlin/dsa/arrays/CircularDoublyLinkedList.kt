@@ -1,4 +1,4 @@
-package org.example
+package org.example.dsa.arrays
 
 class LL {
     private var head: Node? = null
