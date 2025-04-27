@@ -18,10 +18,10 @@ tasks.jacocoTestReport {
 tasks.jacocoTestCoverageVerification {
     violationRules {
         rule {
-            enabled = false
-//            limit {
-//                minimum = "1.0".toBigDecimal() // 100% coverage required
-//            }
+            includes = listOf("com.example.Calculator*")
+            limit {
+                minimum = "1.0".toBigDecimal() // 100% coverage required
+            }
         }
     }
 }
