@@ -18,7 +18,13 @@ tasks.jacocoTestReport {
 tasks.jacocoTestCoverageVerification {
     violationRules {
         rule {
-            includes = listOf("com.example.Calculator*")
+           // includes = listOf("com.example.Calculator*")
+            includes = fileTree("src/test/kotlin").files
+                .map { testFile ->
+                    val baseName = testFile.name.removeSuffix("Test.kt")
+                    "**/$baseName.class" // Wildcard match by base name
+                }
+
             limit {
                 minimum = "1.0".toBigDecimal() // 100% coverage required
             }
