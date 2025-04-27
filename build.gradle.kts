@@ -44,6 +44,11 @@ dependencies {
     implementation ("io.reactivex.rxjava3:rxjava:3.1.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.5.2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.5.2")
+
+    implementation("io.insert-koin:koin-core:4.0.2")
+    testImplementation ("org.junit.jupiter:junit-jupiter:5.10.2")
+    testImplementation ("io.mockk:mockk:1.13.10")
+    testImplementation ("com.google.truth:truth:1.4.2")
 }
 
 tasks.test {
