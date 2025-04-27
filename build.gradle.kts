@@ -1,5 +1,33 @@
 plugins {
     kotlin("jvm") version "2.1.0"
+    jacoco
+}
+
+jacoco {
+    toolVersion = "0.8.10"
+}
+
+tasks.jacocoTestReport {
+    dependsOn(tasks.test) // run tests before generating report
+    reports {
+        xml.required.set(true)
+        html.required.set(true)
+    }
+}
+
+tasks.jacocoTestCoverageVerification {
+    violationRules {
+        rule {
+            limit {
+                minimum = "1.0".toBigDecimal() // 100% coverage required
+            }
+        }
+    }
+}
+
+// 👇 This part ensures verification runs as part of `./gradlew check`
+tasks.check {
+    dependsOn(tasks.jacocoTestCoverageVerification)
 }
 
 group = "org.example"
