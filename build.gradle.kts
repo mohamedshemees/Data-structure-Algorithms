@@ -24,7 +24,7 @@ tasks.jacocoTestCoverageVerification {
                 "**/${testPath.replace("Test.kt", ".class")}"
             }
             limit {
-                minimum = ".8".toBigDecimal() // 100% coverage required
+                minimum = ".80".toBigDecimal() // 100% coverage required
             }
         }
     }
