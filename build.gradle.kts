@@ -20,7 +20,6 @@ tasks.jacocoTestCoverageVerification {
     violationRules {
         classDirectories.setFrom(
             classDirectories.files.forEach {
-                println(it)
                 fileTree(it) {
                     exclude("**/model/**")
                     exclude("**/di/**")
