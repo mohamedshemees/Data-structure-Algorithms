@@ -1,7 +1,9 @@
 name: Test Coverage Enforcement
+
 on:
   pull_request:
-    branches: [ main ]
+    branches:
+      - main
 
 jobs:
   coverage-check:
@@ -9,50 +11,62 @@ jobs:
     permissions:
       contents: read
       pull-requests: write  # Required for PR comments
-      
+
     steps:
+      # Step 1: Checkout the code
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # Step 2: Make gradlew executable
       - name: Make gradlew executable
-        run: chmod +x ./gradlew  # Fixes permission error
+        run: chmod +x ./gradlew
 
+      # Step 3: Set up JDK 17
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
-          distribution: 'temurin'
+          java-version: "17"
+          distribution: temurin
 
+      # Step 4: Run the tests and generate reports
       - name: Run coverage check
         run: |
-          # Run tests and generate reports
+          # Run the tests and generate reports
           ./gradlew clean test jacocoTestReport jacocoTestCoverageVerification
-          
-          # Safely extract coverage value
+
+          # Safely extract coverage value from the generated report
           COVERAGE=$(awk -F'[><]' '
             /<counter type="LINE"/ { 
-              if ($3+$5 > 0) {
-                printf "%d", ($3/($3+$5)*100
+              if ($3 + $5 > 0) {
+                # Calculate coverage percentage
+                printf "%d", ($3 / ($3 + $5) * 100)
                 exit
               }
             }
-            END { if (!NR) print "0" }' build/reports/jacoco/test/jacocoTestReport.xml | tr -d '\n')
-          
-          # Validate numeric value
+            END {
+              # Default to 0 if no data is found
+              if (!NR) print "0"
+            }' build/reports/jacoco/test/jacocoTestReport.xml | tr -d '\n')
+
+          # Validate that the coverage value is numeric
           if ! [[ "$COVERAGE" =~ ^[0-9]+$ ]]; then
             echo "⚠️ Invalid coverage value: '$COVERAGE'"
             COVERAGE=0
           fi
-          
+
+          # Set the coverage percentage as an environment variable
           echo "COVERAGE_PERCENT=${COVERAGE}" >> $GITHUB_ENV
+
+          # Display the total line coverage
           echo "Total line coverage: ${COVERAGE}%"
-          
-          # Only fail if valid coverage < 80%
+
+          # Only fail if the coverage is below the threshold of 80%
           if [ "$COVERAGE" -lt 80 ]; then
             echo "❌ Coverage below required 80% threshold"
             exit 1
           fi
 
+      # Step 5: Upload the coverage report as an artifact
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@v4
