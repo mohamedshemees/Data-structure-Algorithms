@@ -57,22 +57,19 @@ jobs:
           if [ ! -f "$REPORT_PATH" ]; then
             echo "❌ JaCoCo report not found at $REPORT_PATH"
             echo "coverage_check_failed=true" >> $GITHUB_ENV
-          fi
-
-          # Debug: Output the XML file content for inspection
-          echo "Debug: JaCoCo report content"
-          cat "$REPORT_PATH"
-
-          # Extract coverage value from the report using xmlstarlet
-          COVERAGE=$(xmlstarlet sel -t -v "sum(@covered)" "$REPORT_PATH")
-          MISSED=$(xmlstarlet sel -t -v "sum(@missed)" "$REPORT_PATH")
-          
-          # Calculate total coverage percentage
-          TOTAL=$(($COVERAGE + $MISSED))
-          if [ "$TOTAL" -eq 0 ]; then
-            COVERAGE_PERCENT=0
+            COVERAGE_PERCENT=0  # Default coverage if report is missing
           else
-            COVERAGE_PERCENT=$((($COVERAGE * 100) / $TOTAL))
+            # Extract coverage value from the report using xmlstarlet
+            COVERAGE=$(xmlstarlet sel -t -v "sum(@covered)" "$REPORT_PATH")
+            MISSED=$(xmlstarlet sel -t -v "sum(@missed)" "$REPORT_PATH")
+            
+            # Calculate total coverage percentage
+            TOTAL=$(($COVERAGE + $MISSED))
+            if [ "$TOTAL" -eq 0 ]; then
+              COVERAGE_PERCENT=0
+            else
+              COVERAGE_PERCENT=$((($COVERAGE * 100) / $TOTAL))
+            fi
           fi
 
           # Set the coverage percentage as an environment variable
@@ -87,7 +84,7 @@ jobs:
             echo "tests_failed=false" >> $GITHUB_ENV
           fi
 
-      # Step 6: Upload the coverage report as an artifact
+      # Step 6: Upload the coverage report as an artifact (even if not found)
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@v4
