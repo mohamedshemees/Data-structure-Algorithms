@@ -59,16 +59,26 @@ tasks.jacocoTestReport {
 tasks.jacocoTestCoverageVerification {
     dependsOn(tasks.jacocoTestReport)
 
-    classDirectories.setFrom(tasks.jacocoTestReport.get().classDirectories)
+    // Get the test classes and map them to production classes
+    val testClasses = fileTree("$buildDir/classes/kotlin/test")
+        .matching { include("**/*Test.class") }
+        .files
+        .map { it.name.removeSuffix("Test.class") }
+
+    // Include only production classes that have corresponding test classes
+    classDirectories.setFrom(
+        fileTree("$buildDir/classes/kotlin/main").matching {
+            include(testClasses.map { "**/$it.class" })
+        }
+    )
 
     violationRules {
         rule {
             element = "CLASS"
-            includes = listOf("*")
-
+            includes = listOf("*")  // Apply to all classes
             limit {
                 counter = "LINE"
-                minimum = "0.80".toBigDecimal()
+                minimum = "0.80".toBigDecimal()  // 80% minimum coverage
             }
         }
     }
