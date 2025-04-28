@@ -27,40 +27,30 @@ jobs:
         run: |
           # Run tests and generate reports
           ./gradlew clean test jacocoTestReport jacocoTestCoverageVerification
-
-          # Safely calculate coverage percentage
+          
+          # Safely extract coverage value
           COVERAGE=$(awk -F'[><]' '
-            BEGIN {cov=0; total=1}  # Default values to prevent division by zero
-            /<counter type="LINE"/ {
-              cov=$3;
-              total=$3+$5;
-              if (total > 0) {
-                coverage=int(cov/total*100);
-                print coverage;
-                exit;  # Process only the first match
-              } else {
-                print 0;
-                exit;
+            /<counter type="LINE"/ { 
+              if ($3+$5 > 0) {
+                printf "%d", ($3/($3+$5)*100
+                exit
               }
             }
-            END {
-              if (!coverage) print 0;  # Fallback if no match found
-            }' build/reports/jacoco/test/jacocoTestReport.xml)
-
-          # Ensure COVERAGE is treated as an integer, default to 0 if empty
-          if [ -z "$COVERAGE" ]; then
+            END { if (!NR) print "0" }' build/reports/jacoco/test/jacocoTestReport.xml | tr -d '\n')
+          
+          # Validate numeric value
+          if ! [[ "$COVERAGE" =~ ^[0-9]+$ ]]; then
+            echo "⚠️ Invalid coverage value: '$COVERAGE'"
             COVERAGE=0
           fi
-
-          echo "COVERAGE_PERCENT=$COVERAGE" >> $GITHUB_ENV
-          echo "Total line coverage: $COVERAGE%"
           
-          # Only fail if we have meaningful coverage data below threshold
-          if [ "$COVERAGE" -ge 0 ] && [ "$COVERAGE" -lt 80 ]; then
+          echo "COVERAGE_PERCENT=${COVERAGE}" >> $GITHUB_ENV
+          echo "Total line coverage: ${COVERAGE}%"
+          
+          # Only fail if valid coverage < 80%
+          if [ "$COVERAGE" -lt 80 ]; then
             echo "❌ Coverage below required 80% threshold"
             exit 1
-          elif [ "$COVERAGE" -eq 0 ]; then
-            echo "⚠️ Warning: No coverage data found"
           fi
 
       - name: Upload coverage report
