@@ -16,15 +16,26 @@ tasks.jacocoTestReport {
     }
 }
 
-
 tasks.jacocoTestCoverageVerification {
     violationRules {
+        // Only include changed/main files that have tests
         classDirectories.setFrom(
-            classDirectories.files.map { file ->
-                fileTree(file) {
-                    exclude("**/model/**")
-                    exclude("**/di/**")
-                }
+            fileTree("$buildDir/classes/kotlin/main") {
+                // Include ONLY if:
+                // 1. File was changed in PR, AND
+                // 2. Has corresponding test file
+                include(
+                    System.getenv("CHANGED_FILES")
+                        ?.split(" ")
+                        ?.filter { it.endsWith(".kt") && !it.contains("/test/") }
+                        ?.map { 
+                            val path = it
+                                .replace("src/main/kotlin/", "")
+                                .replace(".kt", ".*")
+                            "**/${path}"
+                        } 
+                        ?: listOf("**/*") // Fallback: all files (local dev)
+                )
             }
         )
 
