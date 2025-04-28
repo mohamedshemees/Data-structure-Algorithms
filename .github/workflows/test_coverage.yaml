@@ -37,11 +37,11 @@ jobs:
           cat "$REPORT_PATH"
 
           # Extract coverage value from the report
-          COVERAGE=$(awk -F'[><]' '
+          COVERAGE=$(awk -F'"' '
             /<counter type="LINE"/ {
               for (i=1; i<=NF; i++) {
-                if ($i == "covered") covered=$(i+1);
-                if ($i == "missed") missed=$(i+1);
+                if ($i == "missed=") missed=$(i+1);
+                if ($i == "covered=") covered=$(i+1);
               }
               if (covered + missed > 0) {
                 printf "%d", (covered / (covered + missed) * 100)
@@ -100,4 +100,28 @@ jobs:
               repo: context.repo.repo,
               issue_number: context.issue.number,
               body: comment
+            });
+      - name: Post coverage comment
+        if: always()
+        uses: actions/github-script@v6
+        env:
+          COVERAGE: ${{ env.COVERAGE_PERCENT }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: >
+            const message = `
+
+            ## 📊 Test Coverage: ${process.env.COVERAGE}%
+
+            **Minimum Required:** 80%
+
+            ${process.env.COVERAGE < 80 ? '❌ **Merge blocked**' : '✅ **Ready to merge**'}
+
+            `;
+
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: message
             });
