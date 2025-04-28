@@ -20,28 +20,37 @@ tasks.jacocoTestReport {
 tasks.jacocoTestCoverageVerification {
     violationRules {
         classDirectories.setFrom(
-            classDirectories.files.forEach {
-                fileTree(it) {
+            classDirectories.files.map { file ->
+                fileTree(file) {
                     exclude("**/model/**")
                     exclude("**/di/**")
                 }
             }
         )
+
         rule {
             limit {
                 minimum = "0.8".toBigDecimal()
             }
+        }
 
+        rule {
             limit {
                 counter = "LINE"
                 value = "COVEREDRATIO"
                 minimum = "0.8".toBigDecimal()
             }
+        }
+
+        rule {
             limit {
                 counter = "BRANCH"
                 value = "COVEREDRATIO"
                 minimum = "0.8".toBigDecimal()
             }
+        }
+
+        rule {
             limit {
                 counter = "METHOD"
                 value = "COVEREDRATIO"
