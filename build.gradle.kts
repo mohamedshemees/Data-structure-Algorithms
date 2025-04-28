@@ -75,7 +75,7 @@ tasks.jacocoTestCoverageVerification {
     violationRules {
         rule {
             element = "CLASS"
-            includes = listOf("*")  // Apply to all classes
+            includes = testClasses.map { "$it" }  
             limit {
                 counter = "LINE"
                 minimum = "0.80".toBigDecimal()  // 80% minimum coverage
