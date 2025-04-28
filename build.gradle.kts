@@ -16,11 +16,19 @@ tasks.jacocoTestReport {
     }
 }
 
+
+tasks.jacocoTestReport {
+    dependsOn(tasks.test)
+    reports {
+        xml.required = true
+        csv.required = true
+    }
+}
+
 tasks.jacocoTestCoverageVerification {
     violationRules {
         classDirectories.setFrom(
             classDirectories.files.forEach {
-                println(it)
                 fileTree(it) {
                     exclude("**/model/**")
                     exclude("**/di/**")
@@ -50,6 +58,7 @@ tasks.jacocoTestCoverageVerification {
         }
     }
 }
+
 tasks.check {
     dependsOn(tasks.jacocoTestCoverageVerification)
 }
