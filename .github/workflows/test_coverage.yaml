@@ -47,14 +47,16 @@ jobs:
               if (!coverage) print 0;  # Fallback if no match found
             }' build/reports/jacoco/test/jacocoTestReport.xml)
 
-          # Ensure COVERAGE is treated as an integer
-          COVERAGE=${COVERAGE:-0}  # Default to 0 if empty
+          # Ensure COVERAGE is treated as an integer, default to 0 if empty
+          if [ -z "$COVERAGE" ]; then
+            COVERAGE=0
+          fi
 
           echo "COVERAGE_PERCENT=$COVERAGE" >> $GITHUB_ENV
           echo "Total line coverage: $COVERAGE%"
           
           # Only fail if we have meaningful coverage data below threshold
-          if [ "$COVERAGE" -ne 0 ] && [ "$COVERAGE" -lt 80 ]; then
+          if [ "$COVERAGE" -ge 0 ] && [ "$COVERAGE" -lt 80 ]; then
             echo "❌ Coverage below required 80% threshold"
             exit 1
           elif [ "$COVERAGE" -eq 0 ]; then
