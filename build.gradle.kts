@@ -4,34 +4,60 @@ plugins {
 }
 
 jacoco {
-    toolVersion = "0.8.10"
+    toolVersion = "0.8.7"
 }
 
 tasks.jacocoTestReport {
-    dependsOn(tasks.test) // run tests before generating report
-    reports {
-        xml.required.set(true)
-        html.required.set(true)
+    dependsOn(tasks.test)
+    doFirst {
+        classDirectories.files.forEach {
+            println(it)
+        }
+
+        reports {
+            xml.required = true
+            csv.required = true
+        }
     }
 }
 
 tasks.jacocoTestCoverageVerification {
     violationRules {
+        classDirectories.setFrom(
+            classDirectories.files.forEach {
+                println(it)
+                fileTree(it) {
+                    exclude("**/model/**")
+                    exclude("**/di/**")
+                }
+            }
+        )
         rule {
-            includes = fileTree("src/test/kotlin").files.map { testFile ->
-                // Preserve package structure in the pattern
-                val testPath = testFile.toRelativeString(file("src/test/kotlin"))
-                "**/${testPath.replace("Test.kt", ".class")}"
+            limit {
+                minimum = "0.8".toBigDecimal()
+            }
+
+            limit {
+                counter = "LINE"
+                value = "COVEREDRATIO"
+                minimum = "0.8".toBigDecimal()
             }
             limit {
-                minimum = ".80".toBigDecimal() // 100% coverage required
+                counter = "BRANCH"
+                value = "COVEREDRATIO"
+                minimum = "0.8".toBigDecimal()
+            }
+            limit {
+                counter = "METHOD"
+                value = "COVEREDRATIO"
+                minimum = "0.8".toBigDecimal()
             }
         }
     }
 }
-
 // 👇 This part ensures verification runs as part of `./gradlew check`
 tasks.check {
+
     dependsOn(tasks.jacocoTestCoverageVerification)
 }
 
@@ -58,4 +84,6 @@ dependencies {
 
 tasks.test {
     useJUnitPlatform()
+        finalizedBy(tasks.jacocoTestReport )
+
 }

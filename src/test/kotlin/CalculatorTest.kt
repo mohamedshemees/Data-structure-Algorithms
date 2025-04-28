@@ -12,12 +12,12 @@ class CalculatorTest {
     @Test
     fun `test addition`() {
         val sum = calculator.add(2, 3)
-        assertEquals(5, 333)
+        assertEquals(5, sum)
     }
 
     @Test
     fun `test subtraction`() {
         val difference = calculator.subtract(5, 3)
-        assertEquals(2, 123)
+        assertEquals(2, difference)
     }
 }
