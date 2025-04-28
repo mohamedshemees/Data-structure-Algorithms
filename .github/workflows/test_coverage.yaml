@@ -17,20 +17,26 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Step 2: Make gradlew executable
+      # Step 2: Cache xmlstarlet
+      - name: Cache xmlstarlet
+        id: cache-xmlstarlet
+        uses: actions/cache@v3
+        with:
+          path: /usr/local/bin/xmlstarlet
+          key: ${{ runner.os }}-xmlstarlet-${{ hashFiles('**/*.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-xmlstarlet-
+
+      # Step 3: Make gradlew executable
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
-      # Step 3: Set up JDK 17
+      # Step 4: Set up JDK 17
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: "17"
           distribution: temurin
-
-      # Step 4: Install xmlstarlet (for XML parsing)
-      - name: Install xmlstarlet
-        run: sudo apt-get install xmlstarlet
 
       # Step 5: Run the tests and generate reports
       - name: Run coverage check
@@ -43,23 +49,36 @@ jobs:
           REPORT_PATH="build/reports/jacoco/test/jacocoTestReport.xml"
           if [ ! -f "$REPORT_PATH" ]; then
             echo "❌ JaCoCo report not found at $REPORT_PATH"
-            exit 1
+            echo "coverage_check_failed=true" >> $GITHUB_ENV
           fi
 
-          # Parse the JaCoCo report with xmlstarlet and calculate coverage
-          LINE_COVERAGE=$(xmlstarlet sel -t -v "sum(//counter[@type='LINE']/@covered) div sum(//counter[@type='LINE']/@covered + //counter[@type='LINE']/@missed) * 100" "$REPORT_PATH")
-          CLASS_COVERAGE=$(xmlstarlet sel -t -v "sum(//counter[@type='CLASS']/@covered) div sum(//counter[@type='CLASS']/@covered + //counter[@type='CLASS']/@missed) * 100" "$REPORT_PATH")
-          BRANCH_COVERAGE=$(xmlstarlet sel -t -v "sum(//counter[@type='BRANCH']/@covered) div sum(//counter[@type='BRANCH']/@covered + //counter[@type='BRANCH']/@missed) * 100" "$REPORT_PATH")
+          # Debug: Output the XML file content for inspection
+          echo "Debug: JaCoCo report content"
+          cat "$REPORT_PATH"
 
-          # Output the coverage values
-          echo "LINE_COVERAGE=$LINE_COVERAGE"
-          echo "CLASS_COVERAGE=$CLASS_COVERAGE"
-          echo "BRANCH_COVERAGE=$BRANCH_COVERAGE"
+          # Extract coverage value from the report using xmlstarlet
+          COVERAGE=$(xmlstarlet sel -t -v "sum(@covered)" "$REPORT_PATH")
+          MISSED=$(xmlstarlet sel -t -v "sum(@missed)" "$REPORT_PATH")
+          
+          # Calculate total coverage percentage
+          TOTAL=$(($COVERAGE + $MISSED))
+          if [ "$TOTAL" -eq 0 ]; then
+            COVERAGE_PERCENT=0
+          else
+            COVERAGE_PERCENT=$((($COVERAGE * 100) / $TOTAL))
+          fi
 
-          # Set coverage as environment variables
-          echo "LINE_COVERAGE=${LINE_COVERAGE}" >> $GITHUB_ENV
-          echo "CLASS_COVERAGE=${CLASS_COVERAGE}" >> $GITHUB_ENV
-          echo "BRANCH_COVERAGE=${BRANCH_COVERAGE}" >> $GITHUB_ENV
+          # Set the coverage percentage as an environment variable
+          echo "COVERAGE_PERCENT=${COVERAGE_PERCENT}" >> $GITHUB_ENV
+          echo "Total line coverage: ${COVERAGE_PERCENT}%"
+
+          # Check if there are any test failures
+          if [ $(grep -c "FAILED" build/reports/tests/test/index.html) -gt 0 ]; then
+            echo "❌ There are failed tests. Please check the test results."
+            echo "tests_failed=true" >> $GITHUB_ENV
+          else
+            echo "tests_failed=false" >> $GITHUB_ENV
+          fi
 
       # Step 6: Upload the coverage report as an artifact
       - name: Upload coverage report
@@ -69,46 +88,28 @@ jobs:
           name: coverage-report
           path: build/reports/jacoco/test/html/
 
-      # Step 7: Check if any tests failed
-      - name: Check if any tests failed
-        id: test-results
-        run: |
-          # Get the number of failed tests from the test results
-          FAILED_TESTS=$(grep -c 'FAIL' build/test-logs/test-results.xml)
-          echo "Failed tests: $FAILED_TESTS"
-          echo "FAILED_TESTS=$FAILED_TESTS" >> $GITHUB_ENV
-
-      # Step 8: Comment on PR with coverage and test status
-      - name: Comment on PR with coverage and test status
+      # Step 7: Comment on PR with coverage details and test failure status
+      - name: Comment on PR
         if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
-            const lineCoverage = process.env.LINE_COVERAGE;
-            const classCoverage = process.env.CLASS_COVERAGE;
-            const branchCoverage = process.env.BRANCH_COVERAGE;
-            const failedTests = process.env.FAILED_TESTS;
+            const coverage = process.env.COVERAGE_PERCENT;
+            let comment = `## JaCoCo Test Coverage Report
+            Total Line Coverage: **${coverage}%**
 
-            let comment = `## 📊 Test Coverage Report\n
-            **Line Coverage**: ${lineCoverage}%\n
-            **Class Coverage**: ${classCoverage}%\n
-            **Branch Coverage**: ${branchCoverage}%\n
-            **Minimum Required**: 80%\n`;
+            ${coverage >= 80 
+              ? '✅ Coverage meets or exceeds the required 80% threshold. Great job!'
+              : '❌ Coverage is below the required 80% threshold. Please add more tests to improve coverage.'}`;
 
-            // Append failed test message
-            if (failedTests > 0) {
-              comment += `\n❌ **${failedTests} test(s) failed**! Please review the failing tests.`;
+            const testsFailed = process.env.tests_failed === 'true';
+            if (testsFailed) {
+              comment += '\n\n❌ There are failed tests. Please check the test results.';
             }
 
-            if (lineCoverage >= 80 && classCoverage >= 80 && branchCoverage >= 80 && failedTests === 0) {
-              comment += `\n✅ **Coverage and tests are good. Ready to merge!**`;
-            } else {
-              comment += `\n❌ **Coverage or tests are not sufficient. Merge blocked.**`;
-            }
+            comment += `
 
-            // Append artifact link
-            const artifactLink = `${{ steps.upload-coverage-report.outputs.artifact-url }}`
-            comment += `\n🔽 [Download the coverage artifact](${artifactLink})`;
+            📊 [View detailed coverage report](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})`;
 
             await github.rest.issues.createComment({
               owner: context.repo.owner,
@@ -116,3 +117,10 @@ jobs:
               issue_number: context.issue.number,
               body: comment
             });
+
+      # Step 8: Fail the job if there are test failures or coverage below 80%
+      - name: Fail the job if there are failed tests or low coverage
+        if: env.tests_failed == 'true' || env.COVERAGE_PERCENT < 80
+        run: |
+          echo "Job failed due to test failures or coverage being below threshold."
+          exit 1
