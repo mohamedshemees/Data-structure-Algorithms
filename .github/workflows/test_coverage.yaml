@@ -7,13 +7,13 @@ on:
       - develop
 
 jobs:
-  test-and-generate-report:
+  test-and-coverage:
+    name: Run tests and verify coverage
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
-    outputs:
-      tests_passed: ${{ steps.test.outcome }}
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -28,12 +28,13 @@ jobs:
           distribution: temurin
 
       - name: Run tests
-        id: test
+        id: run_tests
+        continue-on-error: true
         run: |
           ./gradlew clean test jacocoTestReport
 
-      - name: Comment if tests failed
-        if: failure()
+      - name: Handle test failures
+        if: steps.run_tests.outcome != 'success'
         uses: actions/github-script@v7
         with:
           script: |
@@ -41,90 +42,75 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: "❌ Some tests failed. Please fix the tests."
+              body: "❌ **Tests failed. Please fix them before merging.**"
             });
+            core.setFailed('Tests failed.')
 
-  check-coverage:
-    needs: test-and-generate-report
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-    if: ${{ needs.test-and-generate-report.result == 'success' }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+      - name: Upload coverage report
+        if: steps.run_tests.outcome == 'success'
+        uses: actions/upload-artifact@v4
         with:
-          java-version: "17"
-          distribution: temurin
+          name: coverage-report
+          path: build/reports/jacoco/test/jacocoTestReport.xml
 
-      - name: Generate coverage verification
-        id: coverage
-        continue-on-error: true
-        run: |
-          ./gradlew jacocoTestCoverageVerification
+      - name: Install xmllint
+        if: steps.run_tests.outcome == 'success'
+        run: sudo apt-get install -y libxml2-utils
 
-      - name: Parse coverage report
+      - name: Check coverage
+        if: steps.run_tests.outcome == 'success'
+        id: check_coverage
         run: |
           REPORT_PATH="build/reports/jacoco/test/jacocoTestReport.xml"
           if [ ! -f "$REPORT_PATH" ]; then
-            echo "❌ JaCoCo report not found!"
+            echo "❌ Coverage report not found."
+            echo "coverage_found=false" >> $GITHUB_ENV
             exit 1
           fi
 
-          sudo apt-get install -y libxml2-utils
-
           LINE_COVERED=$(xmllint --xpath "string(//counter[@type='LINE']/@covered)" "$REPORT_PATH")
           LINE_MISSED=$(xmllint --xpath "string(//counter[@type='LINE']/@missed)" "$REPORT_PATH")
-          CLASS_COVERED=$(xmllint --xpath "string(//counter[@type='CLASS']/@covered)" "$REPORT_PATH")
-          CLASS_MISSED=$(xmllint --xpath "string(//counter[@type='CLASS']/@missed)" "$REPORT_PATH")
           BRANCH_COVERED=$(xmllint --xpath "string(//counter[@type='BRANCH']/@covered)" "$REPORT_PATH")
           BRANCH_MISSED=$(xmllint --xpath "string(//counter[@type='BRANCH']/@missed)" "$REPORT_PATH")
+          CLASS_COVERED=$(xmllint --xpath "string(//counter[@type='CLASS']/@covered)" "$REPORT_PATH")
+          CLASS_MISSED=$(xmllint --xpath "string(//counter[@type='CLASS']/@missed)" "$REPORT_PATH")
 
-          LINE_COVERAGE_PERCENT=$(( (LINE_COVERED * 100) / (LINE_COVERED + LINE_MISSED) ))
-          CLASS_COVERAGE_PERCENT=$(( (CLASS_COVERED * 100) / (CLASS_COVERED + CLASS_MISSED) ))
-          BRANCH_COVERAGE_PERCENT=$(( (BRANCH_COVERED * 100) / (BRANCH_COVERED + BRANCH_MISSED) ))
+          LINE_COVERAGE=$(( (LINE_COVERED * 100) / (LINE_COVERED + LINE_MISSED) ))
+          BRANCH_COVERAGE=$(( (BRANCH_COVERED * 100) / (BRANCH_COVERED + BRANCH_MISSED) ))
+          CLASS_COVERAGE=$(( (CLASS_COVERED * 100) / (CLASS_COVERED + CLASS_MISSED) ))
 
-          echo "LINE_COVERAGE_PERCENT=${LINE_COVERAGE_PERCENT}" >> $GITHUB_ENV
-          echo "CLASS_COVERAGE_PERCENT=${CLASS_COVERAGE_PERCENT}" >> $GITHUB_ENV
-          echo "BRANCH_COVERAGE_PERCENT=${BRANCH_COVERAGE_PERCENT}" >> $GITHUB_ENV
+          echo "LINE_COVERAGE=$LINE_COVERAGE" >> $GITHUB_ENV
+          echo "BRANCH_COVERAGE=$BRANCH_COVERAGE" >> $GITHUB_ENV
+          echo "CLASS_COVERAGE=$CLASS_COVERAGE" >> $GITHUB_ENV
 
-      - name: Comment on PR with coverage result
+      - name: Comment coverage result
+        if: steps.run_tests.outcome == 'success'
         uses: actions/github-script@v7
         with:
           script: |
-            const lineCoverage = process.env.LINE_COVERAGE_PERCENT;
-            const classCoverage = process.env.CLASS_COVERAGE_PERCENT;
-            const branchCoverage = process.env.BRANCH_COVERAGE_PERCENT;
+            const line = process.env.LINE_COVERAGE;
+            const branch = process.env.BRANCH_COVERAGE;
+            const classCoverage = process.env.CLASS_COVERAGE;
 
-            const comment = `
-            ## 🛡️ JaCoCo Test Coverage Report
-            | Metric          | Coverage % |
-            |-----------------|------------|
-            | Line Coverage   | ${lineCoverage}% |
-            | Class Coverage  | ${classCoverage}% |
-            | Branch Coverage | ${branchCoverage}% |
-
-            ${lineCoverage >= 80 && classCoverage >= 80 && branchCoverage >= 80
-              ? '✅ **Coverage is above 80%. Ready to merge!**'
-              : '❌ **Coverage is below 80%. Please add more tests before merging.**'}
-
-            📊 [View full report](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            let message = `
+            ## 📊 JaCoCo Coverage Report
+            | Metric        | Coverage % |
+            |---------------|------------|
+            | Line Coverage | ${line}% |
+            | Branch Coverage | ${branch}% |
+            | Class Coverage | ${classCoverage}% |
             `;
+
+            if (line < 80 || branch < 80 || classCoverage < 80) {
+              message += '\n❌ **Coverage below 80%, please improve it before merging.**';
+              core.setFailed('Coverage below 80%');
+            } else {
+              message += '\n✅ **Coverage meets minimum 80% requirement. Good job!**';
+            }
 
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: comment
+              body: message
             });
-
-      - name: Fail if coverage too low
-        run: |
-          if [ "$LINE_COVERAGE_PERCENT" -lt 80 ] || [ "$CLASS_COVERAGE_PERCENT" -lt 80 ] || [ "$BRANCH_COVERAGE_PERCENT" -lt 80 ]; then
-            echo "❌ Coverage below threshold. Failing."
-            exit 1
-          fi
