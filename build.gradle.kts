@@ -55,7 +55,6 @@ tasks.jacocoTestCoverageVerification {
         }
     }
 }
-// 👇 This part ensures verification runs as part of `./gradlew check`
 tasks.check {
 
     dependsOn(tasks.jacocoTestCoverageVerification)
