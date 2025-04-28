@@ -13,38 +13,59 @@ jobs:
       pull-requests: write  # Required for PR comments
 
     steps:
-      # Step 1: Checkout the code
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Step 2: Make gradlew executable
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
-      # Step 3: Set up JDK 17
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: "17"
           distribution: temurin
 
-      # Step 4: Run the tests and generate reports
-      - name: Run coverage check
+      - name: Run tests and generate reports
+        id: test_and_coverage
         run: |
-          # Run the tests and generate reports
+          set +e
           ./gradlew clean test jacocoTestReport jacocoTestCoverageVerification
+          echo "EXIT_CODE=$?" >> $GITHUB_ENV
+          set -e
 
-          # Check if the JaCoCo report exists
+      - name: Check if tests failed
+        if: env.EXIT_CODE != '0'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const message = `
+            ## ❌ Test Failure
+            Some tests failed. Please fix the issues before we can check coverage.
+            `;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: message
+            });
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fail if tests failed
+        if: env.EXIT_CODE != '0'
+        run: exit 1
+
+      - name: Parse JaCoCo report and set coverage values
+        if: env.EXIT_CODE == '0'
+        run: |
+          sudo apt-get install -y libxml2-utils
+
           REPORT_PATH="build/reports/jacoco/test/jacocoTestReport.xml"
+
           if [ ! -f "$REPORT_PATH" ]; then
-            echo "❌ JaCoCo report not found at $REPORT_PATH"
+            echo "❌ JaCoCo report not found!"
             exit 1
           fi
 
-          # Install xmllint for XML parsing (if not already available)
-          sudo apt-get install -y libxml2-utils
-
-          # Extract coverage values using xmllint
           LINE_COVERED=$(xmllint --xpath "string(//counter[@type='LINE']/@covered)" "$REPORT_PATH")
           LINE_MISSED=$(xmllint --xpath "string(//counter[@type='LINE']/@missed)" "$REPORT_PATH")
           CLASS_COVERED=$(xmllint --xpath "string(//counter[@type='CLASS']/@covered)" "$REPORT_PATH")
@@ -52,38 +73,16 @@ jobs:
           BRANCH_COVERED=$(xmllint --xpath "string(//counter[@type='BRANCH']/@covered)" "$REPORT_PATH")
           BRANCH_MISSED=$(xmllint --xpath "string(//counter[@type='BRANCH']/@missed)" "$REPORT_PATH")
 
-          # Calculate percentages
           LINE_COVERAGE_PERCENT=$(( (LINE_COVERED * 100) / (LINE_COVERED + LINE_MISSED) ))
           CLASS_COVERAGE_PERCENT=$(( (CLASS_COVERED * 100) / (CLASS_COVERED + CLASS_MISSED) ))
           BRANCH_COVERAGE_PERCENT=$(( (BRANCH_COVERED * 100) / (BRANCH_COVERED + BRANCH_MISSED) ))
 
-          # Display the total line coverage (without the table in CLI)
-          echo "Total line coverage: ${LINE_COVERAGE_PERCENT}%"
-          echo "Class coverage: ${CLASS_COVERAGE_PERCENT}%"
-          echo "Branch coverage: ${BRANCH_COVERAGE_PERCENT}%"
-
-          # Set the coverage percentages as environment variables
           echo "LINE_COVERAGE_PERCENT=${LINE_COVERAGE_PERCENT}" >> $GITHUB_ENV
           echo "CLASS_COVERAGE_PERCENT=${CLASS_COVERAGE_PERCENT}" >> $GITHUB_ENV
           echo "BRANCH_COVERAGE_PERCENT=${BRANCH_COVERAGE_PERCENT}" >> $GITHUB_ENV
 
-          # Fail if any coverage is below the threshold
-          if [ "$LINE_COVERAGE_PERCENT" -lt 80 ] || [ "$CLASS_COVERAGE_PERCENT" -lt 80 ] || [ "$BRANCH_COVERAGE_PERCENT" -lt 80 ]; then
-            echo "❌ Coverage below required 80% threshold"
-            exit 1
-          fi
-
-      # Step 5: Upload the coverage report as an artifact
-      - name: Upload coverage report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report
-          path: build/reports/jacoco/test/html/
-
-      # Step 6: Comment on PR with coverage details
-      - name: Comment on PR with coverage
-        if: github.event_name == 'pull_request'
+      - name: Comment coverage on PR
+        if: env.EXIT_CODE == '0'
         uses: actions/github-script@v7
         with:
           script: |
@@ -91,19 +90,20 @@ jobs:
             const classCoverage = process.env.CLASS_COVERAGE_PERCENT;
             const branchCoverage = process.env.BRANCH_COVERAGE_PERCENT;
 
+            const meetsThreshold = lineCoverage >= 80 && classCoverage >= 80 && branchCoverage >= 80;
+
             const comment = `
-            ## JaCoCo Test Coverage Report
-            | Metric              | Covered | Missed | Coverage % |
-            |---------------------|---------|--------|------------|
-            | Line Coverage       | ${lineCoverage} | ${100 - lineCoverage} | ${lineCoverage}% |
-            | Class Coverage      | ${classCoverage} | ${100 - classCoverage} | ${classCoverage}% |
-            | Branch Coverage     | ${branchCoverage} | ${100 - branchCoverage} | ${branchCoverage}% |
+            ## 📊 JaCoCo Test Coverage Report
+            | Metric         | Coverage % |
+            |----------------|------------|
+            | Line Coverage  | ${lineCoverage}% |
+            | Class Coverage | ${classCoverage}% |
+            | Branch Coverage| ${branchCoverage}% |
 
-            ${lineCoverage >= 80 && classCoverage >= 80 && branchCoverage >= 80 
-              ? '✅ Coverage meets or exceeds the required 80% threshold. Great job!'
-              : '❌ Coverage is below the required 80% threshold. Please add more tests to improve coverage.'}
+            ${meetsThreshold ? '✅ Coverage meets required 80% threshold!' : '❌ Coverage below 80%, please improve tests.'}
 
-            📊 [View detailed coverage report](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})`;
+            📋 [View detailed report](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            `;
 
             await github.rest.issues.createComment({
               owner: context.repo.owner,
@@ -111,29 +111,5 @@ jobs:
               issue_number: context.issue.number,
               body: comment
             });
-
-      # Step 7: Post coverage comment
-      - name: Post coverage comment
-        if: always()
-        uses: actions/github-script@v6
-        env:
-          LINE_COVERAGE: ${{ env.LINE_COVERAGE_PERCENT }}
-          CLASS_COVERAGE: ${{ env.CLASS_COVERAGE_PERCENT }}
-          BRANCH_COVERAGE: ${{ env.BRANCH_COVERAGE_PERCENT }}
-        with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const message = `
-            ## 📊 Test Coverage
-            **Line Coverage:** ${process.env.LINE_COVERAGE}%
-            **Class Coverage:** ${process.env.CLASS_COVERAGE}%
-            **Branch Coverage:** ${process.env.BRANCH_COVERAGE}%
-            **Minimum Required:** 80%
-            ${process.env.LINE_COVERAGE < 80 || process.env.CLASS_COVERAGE < 80 || process.env.BRANCH_COVERAGE < 80 ? '❌ **Merge blocked**' : '✅ **Ready to merge**'}
-            `;
-            await github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: message
-            });
+
