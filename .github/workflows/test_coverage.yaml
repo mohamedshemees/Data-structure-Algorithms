@@ -1,4 +1,3 @@
-
 name: Test Coverage Enforcement
 
 on:
@@ -42,39 +41,34 @@ jobs:
             exit 1
           fi
 
-          # Debug: Output the XML file content for inspection
-          echo "Debug: JaCoCo report content"
-          cat "$REPORT_PATH"
+          # Install xmllint for XML parsing (if not already available)
+          sudo apt-get install -y libxml2-utils
 
-          # Extract coverage value from the report
-          COVERAGE=$(awk '
-            /<counter type="LINE"/ {
-              match($0, /missed="([0-9]+)"/, m); missed=m[1];
-              match($0, /covered="([0-9]+)"/, c); covered=c[1];
-              if (covered + missed > 0) {
-                printf "%d", (covered / (covered + missed) * 100)
-                exit
-              }
-            }
-            END {
-              # Default to 0 if no valid data is found
-              print "0"
-            }' "$REPORT_PATH" | tr -d '\n')
+          # Extract coverage values using xmllint
+          LINE_COVERED=$(xmllint --xpath "string(//counter[@type='LINE']/@covered)" "$REPORT_PATH")
+          LINE_MISSED=$(xmllint --xpath "string(//counter[@type='LINE']/@missed)" "$REPORT_PATH")
+          CLASS_COVERED=$(xmllint --xpath "string(//counter[@type='CLASS']/@covered)" "$REPORT_PATH")
+          CLASS_MISSED=$(xmllint --xpath "string(//counter[@type='CLASS']/@missed)" "$REPORT_PATH")
+          BRANCH_COVERED=$(xmllint --xpath "string(//counter[@type='BRANCH']/@covered)" "$REPORT_PATH")
+          BRANCH_MISSED=$(xmllint --xpath "string(//counter[@type='BRANCH']/@missed)" "$REPORT_PATH")
 
-          # Validate that the coverage value is numeric
-          if ! [[ "$COVERAGE" =~ ^[0-9]+$ ]]; then
-            echo "⚠️ Invalid coverage value: '$COVERAGE'"
-            COVERAGE=0
-          fi
+          # Calculate percentages
+          LINE_COVERAGE_PERCENT=$(( (LINE_COVERED * 100) / (LINE_COVERED + LINE_MISSED) ))
+          CLASS_COVERAGE_PERCENT=$(( (CLASS_COVERED * 100) / (CLASS_COVERED + CLASS_MISSED) ))
+          BRANCH_COVERAGE_PERCENT=$(( (BRANCH_COVERED * 100) / (BRANCH_COVERED + BRANCH_MISSED) ))
 
-          # Set the coverage percentage as an environment variable
-          echo "COVERAGE_PERCENT=${COVERAGE}" >> $GITHUB_ENV
+          # Display the total line coverage (without the table in CLI)
+          echo "Total line coverage: ${LINE_COVERAGE_PERCENT}%"
+          echo "Class coverage: ${CLASS_COVERAGE_PERCENT}%"
+          echo "Branch coverage: ${BRANCH_COVERAGE_PERCENT}%"
 
-          # Display the total line coverage
-          echo "Total line coverage: ${COVERAGE}%"
+          # Set the coverage percentages as environment variables
+          echo "LINE_COVERAGE_PERCENT=${LINE_COVERAGE_PERCENT}" >> $GITHUB_ENV
+          echo "CLASS_COVERAGE_PERCENT=${CLASS_COVERAGE_PERCENT}" >> $GITHUB_ENV
+          echo "BRANCH_COVERAGE_PERCENT=${BRANCH_COVERAGE_PERCENT}" >> $GITHUB_ENV
 
-          # Fail if coverage is below the threshold of 80%
-          if [ "$COVERAGE" -lt 80 ]; then
+          # Fail if any coverage is below the threshold
+          if [ "$LINE_COVERAGE_PERCENT" -lt 80 ] || [ "$CLASS_COVERAGE_PERCENT" -lt 80 ] || [ "$BRANCH_COVERAGE_PERCENT" -lt 80 ]; then
             echo "❌ Coverage below required 80% threshold"
             exit 1
           fi
@@ -93,11 +87,19 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const coverage = process.env.COVERAGE_PERCENT;
-            const comment = `## JaCoCo Test Coverage Report
-            Total Line Coverage: **${coverage}%**
+            const lineCoverage = process.env.LINE_COVERAGE_PERCENT;
+            const classCoverage = process.env.CLASS_COVERAGE_PERCENT;
+            const branchCoverage = process.env.BRANCH_COVERAGE_PERCENT;
 
-            ${coverage >= 80 
+            const comment = `
+            ## JaCoCo Test Coverage Report
+            | Metric              | Covered | Missed | Coverage % |
+            |---------------------|---------|--------|------------|
+            | Line Coverage       | ${lineCoverage} | ${100 - lineCoverage} | ${lineCoverage}% |
+            | Class Coverage      | ${classCoverage} | ${100 - classCoverage} | ${classCoverage}% |
+            | Branch Coverage     | ${branchCoverage} | ${100 - branchCoverage} | ${branchCoverage}% |
+
+            ${lineCoverage >= 80 && classCoverage >= 80 && branchCoverage >= 80 
               ? '✅ Coverage meets or exceeds the required 80% threshold. Great job!'
               : '❌ Coverage is below the required 80% threshold. Please add more tests to improve coverage.'}
 
@@ -115,14 +117,19 @@ jobs:
         if: always()
         uses: actions/github-script@v6
         env:
-          COVERAGE: ${{ env.COVERAGE_PERCENT }}
+          LINE_COVERAGE: ${{ env.LINE_COVERAGE_PERCENT }}
+          CLASS_COVERAGE: ${{ env.CLASS_COVERAGE_PERCENT }}
+          BRANCH_COVERAGE: ${{ env.BRANCH_COVERAGE_PERCENT }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const message = `
-            ## 📊 Test Coverage: ${process.env.COVERAGE}%
+            ## 📊 Test Coverage
+            **Line Coverage:** ${process.env.LINE_COVERAGE}%
+            **Class Coverage:** ${process.env.CLASS_COVERAGE}%
+            **Branch Coverage:** ${process.env.BRANCH_COVERAGE}%
             **Minimum Required:** 80%
-            ${process.env.COVERAGE < 80 ? '❌ **Merge blocked**' : '✅ **Ready to merge**'}
+            ${process.env.LINE_COVERAGE < 80 || process.env.CLASS_COVERAGE < 80 || process.env.BRANCH_COVERAGE < 80 ? '❌ **Merge blocked**' : '✅ **Ready to merge**'}
             `;
             await github.rest.issues.createComment({
               issue_number: context.issue.number,
