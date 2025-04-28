@@ -1,113 +1,211 @@
-name: Test Coverage Enforcement
-
+---
+name: Test and Coverage Enforcement
 on:
   pull_request:
     branches:
       - main
-
+      - develop
 jobs:
-  coverage-check:
+  test:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write
-
+    outputs:
+      test_status: ${{ steps.run-tests.outputs.test_status }}
     steps:
-      # Step 1: Checkout the code
       - name: Checkout code
         uses: actions/checkout@v4
-
-      # Step 2: Cache Gradle dependencies
       - name: Cache Gradle dependencies
         uses: actions/cache@v3
         with:
           path: ~/.gradle/caches
-          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*',
+            '**/gradle-wrapper.properties') }}
           restore-keys: |
             gradle-${{ runner.os }}-
-
-      # Step 3: Cache xmlstarlet
-      - name: Cache xmlstarlet
-        uses: actions/cache@v3
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
         with:
-          path: /usr/local/bin/xmlstarlet
-          key: xmlstarlet-${{ runner.os }}
-          restore-keys: |
-            xmlstarlet-${{ runner.os }}-
-
-      # Step 4: Install xmlstarlet if not present
-      - name: Install xmlstarlet if not present
+          java-version: "17"
+          distribution: temurin
+      - name: Run tests
+        id: run-tests
         run: |
-          if ! command -v xmlstarlet &> /dev/null; then
-            echo "xmlstarlet not found, installing..."
-            sudo apt-get install -y xmlstarlet
-          fi
-
-      # Step 5: Run tests and generate reports
-      - name: Run coverage check
-        id: coverage
-        run: |
-          # Run the tests and generate reports
-          ./gradlew clean test jacocoTestReport jacocoTestCoverageVerification
-
-          # Check if tests failed
-          TEST_FAILED=$(grep -i "FAILURE" build/reports/tests/test/index.html)
-
-          if [[ -n "$TEST_FAILED" ]]; then
-            # Comment if there are test failures
-            COMMENT="## Test Failures
-There are failing tests in this run. Please check the logs and fix the issues. ❌"
-            curl -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-              -d "{\"body\": \"$COMMENT\"}" \
-              "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments"
+          if ./gradlew clean test --no-daemon; then
+            echo "test_status=success" >> $GITHUB_OUTPUT
+          else
+            echo "test_status=failure" >> $GITHUB_OUTPUT
             exit 1
           fi
-
-          # If tests pass, proceed to check JaCoCo coverage
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: build/reports/tests/test/
+  coverage:
+    runs-on: ubuntu-latest
+    needs: test
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Cache Gradle dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.gradle/caches
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*',
+            '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: temurin
+      - name: Generate coverage report
+        run: |
+          ./gradlew clean test jacocoTestReport jacocoTestCoverageVerification
           REPORT_PATH="build/reports/jacoco/test/jacocoTestReport.xml"
           if [ ! -f "$REPORT_PATH" ]; then
             echo "❌ JaCoCo report not found at $REPORT_PATH"
             exit 1
           fi
-
-          # Extract coverage values (Line, Class, Branch)
-          COVERAGE_LINE=$(xmlstarlet sel -t -m "//counter[@type='LINE']" -v "@covered" "$REPORT_PATH")
-          COVERAGE_CLASS=$(xmlstarlet sel -t -m "//counter[@type='CLASS']" -v "@covered" "$REPORT_PATH")
-          COVERAGE_BRANCH=$(xmlstarlet sel -t -m "//counter[@type='BRANCH']" -v "@covered" "$REPORT_PATH")
-
-          # Comment with coverage data in a neat table
-          COMMENT="## JaCoCo Test Coverage Report
-
-| Metric               | Percentage |
-|----------------------|------------|
-| **Line Coverage**     | **${COVERAGE_LINE}%**  |
-| **Class Coverage**    | **${COVERAGE_CLASS}%** |
-| **Branch Coverage**   | **${COVERAGE_BRANCH}%**|
-
-✅ Coverage meets the required 80% threshold. Great job!"
-
-          if [[ "$COVERAGE_LINE" -lt 80 ]]; then
-            COMMENT="## JaCoCo Test Coverage Report
-
-| Metric               | Percentage |
-|----------------------|------------|
-| **Line Coverage**     | **${COVERAGE_LINE}%**  |
-| **Class Coverage**    | **${COVERAGE_CLASS}%** |
-| **Branch Coverage**   | **${COVERAGE_BRANCH}%**|
-
-❌ Coverage below 80%. Please add more tests or improve coverage."
-
-          fi
-
-          # Create a comment on PR
-          curl -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            -d "{\"body\": \"$COMMENT\"}" \
-            "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments"
-
-      # Step 6: Upload coverage report (if needed)
-      - name: Upload coverage report
+          echo "Debug: JaCoCo report content"
+          cat "$REPORT_PATH"
+      - name: Upload coverage report artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
           path: build/reports/jacoco/test/html/
+      - name: Deploy coverage report to GitHub Pages
+        if: always()
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: build/reports/jacoco/test/html
+          destination_dir: coverage/${{ github.run_id }}
+          keep_files: true
+      - name: Parse line coverage
+        id: jacoco-report
+        uses: madrapps/jacoco-report@v1.7.1
+        with:
+          paths: ${{ github.workspace }}/build/reports/jacoco/test/jacocoTestReport.xml
+          token: ${{ secrets.GITHUB_TOKEN }}
+          min-coverage-overall: 80
+          min-coverage-changed-files: 80
+          update-comment: true
+          pass-emoji: ✅
+          fail-emoji: ❌
+      - name: Parse class and branch coverage
+        id: extra-coverage
+        run: |
+          REPORT_PATH="build/reports/jacoco/test/jacocoTestReport.xml"
+          CLASS_COV=$(awk '
+            /<counter type="CLASS"/ {
+              match($0, /missed="([0-9]+)"/, m); missed=m[1];
+              match($0, /covered="([0-9]+)"/, c); covered=c[1];
+              if (covered + missed > 0) {
+                printf "%.2f", (covered / (covered + missed) * 100)
+                exit
+              }
+            }
+            END { print "100" }' "$REPORT_PATH")
+          BRANCH_COV=$(awk '
+            /<counter type="BRANCH"/ {
+              match($0, /missed="([0-9]+)"/, m); missed=m[1];
+              match($0, /covered="([0-9]+)"/, c); covered=c[1];
+              if (covered + missed > 0) {
+                printf "%.2f", (covered / (covered + missed) * 100)
+                exit
+              }
+            }
+            END { print "100" }' "$REPORT_PATH")
+          echo "CLASS_COV=$CLASS_COV" >> $GITHUB_ENV
+          echo "BRANCH_COV=$BRANCH_COV" >> $GITHUB_ENV
+      - name: Post PR comment
+        if: github.event_name == 'pull_request'
+        env:
+          TEST_STATUS: ${{ needs.test.outputs.test_status }}
+          LINE_COV: ${{ steps.jacoco-report.outputs.overall-coverage }}
+          CHANGED_COV: ${{ steps.jacoco-report.outputs.changed-files-coverage }}
+          CLASS_COV: ${{ env.CLASS_COV }}
+          BRANCH_COV: ${{ env.BRANCH_COV }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          COMMENT="## 📊 Test and Coverage Report\n\n"
+
+
+          if [ "$TEST_STATUS" != "success" ]; then
+            COMMENT+="**Status**: ❌ **Tests Failed**\n"
+            COMMENT+="One or more tests failed. Please fix failing tests before merging.\n\n"
+            COMMENT+="📋 [View test reports](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+            echo -e "$COMMENT" | gh pr comment ${{ github.event.pull_request.number }} --body-file - --repo ${{ github.repository }}
+            echo "❌ Tests failed."
+            exit 1
+          fi
+
+
+          COMMENT+="**Status**: Tests Passed ✅\n\n"
+
+
+          for COVERAGE in "$LINE_COV" "$CLASS_COV" "$BRANCH_COV" "$CHANGED_COV"; do
+            if ! [[ "$COVERAGE" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+              echo "⚠️ Invalid coverage value: '$COVERAGE'"
+              exit 1
+            fi
+          done
+
+
+          LINE_COV_INT=$(printf "%.0f" "$LINE_COV")
+
+          CLASS_COV_INT=$(printf "%.0f" "$CLASS_COV")
+
+          BRANCH_COV_INT=$(printf "%.0f" "$BRANCH_COV")
+
+
+          COMMENT+="**Coverage Metrics**:\n"
+
+          COMMENT+="| Metric               | Percentage | Status |\n"
+
+          COMMENT+="|----------------------|------------|--------|\n"
+
+          COMMENT+="| **Line Coverage**    | ${LINE_COV}% | ${LINE_COV >= 80 && '✅' || '❌'} |\n"
+
+          COMMENT+="| **Class Coverage**   | ${CLASS_COV}% | ${CLASS_COV >= 80 && '✅' || '❌'} |\n"
+
+          COMMENT+="| **Branch Coverage**  | ${BRANCH_COV}% | ${BRANCH_COV >= 80 && '✅' || '❌'} |\n"
+
+          COMMENT+="| **Changed Files**    | ${CHANGED_COV}% | ${CHANGED_COV >= 80 && '✅' || '❌'} |\n\n"
+
+
+          if [ "$LINE_COV_INT" -lt 80 ] || [ "$CLASS_COV_INT" -lt 80 ] || [ "$BRANCH_COV_INT" -lt 80 ]; then
+            COMMENT+="❌ **Coverage Issue**: One or more metrics below 80% threshold. Please add more tests to meet:\n"
+            [ "$LINE_COV_INT" -lt 80 ] && COMMENT+="  - Line Coverage: ${LINE_COV}% (required: 80%)\n"
+            [ "$CLASS_COV_INT" -lt 80 ] && COMMENT+="  - Class Coverage: ${CLASS_COV}% (required: 80%)\n"
+            [ "$BRANCH_COV_INT" -lt 80 ] && COMMENT+="  - Branch Coverage: ${BRANCH_COV}% (required: 80%)\n"
+            COMMENT+="\n📥 [Download coverage report](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\n"
+            COMMENT+="🌐 [Preview coverage report](https://${{ github.repository_owner }}.github.io/${{ github.repository }}/coverage/${{ github.run_id }}/index.html)"
+            echo -e "$COMMENT" | gh pr comment ${{ github.event.pull_request.number }} --body-file - --repo ${{ github.repository }}
+            echo "❌ Coverage below 80%:"
+            echo "  Line Coverage: ${LINE_COV}%"
+            echo "  Class Coverage: ${CLASS_COV}%"
+            echo "  Branch Coverage: ${BRANCH_COV}%"
+            exit 1
+          fi
+
+
+          COMMENT+="✅ **All tests and coverage metrics meet requirements. Ready to merge!**\n\n"
+
+          COMMENT+="📥 [Download coverage report](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\n"
+
+          COMMENT+="🌐 [Preview coverage report](https://${{ github.repository_owner }}.github.io/${{ github.repository }}/coverage/${{ github.run_id }}/index.html)"
+
+          echo -e "$COMMENT" | gh pr comment ${{ github.event.pull_request.number }} --body-file - --repo ${{ github.repository }}
