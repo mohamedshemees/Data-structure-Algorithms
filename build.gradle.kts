@@ -85,6 +85,8 @@ tasks.check {
     dependsOn(tasks.jacocoTestCoverageVerification)
 }
 
+
+
 group = "org.example"
 version = "1.0-SNAPSHOT"
 
