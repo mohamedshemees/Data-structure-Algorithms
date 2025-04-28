@@ -1,3 +1,4 @@
+```yaml
 name: Test Coverage Enforcement
 
 on:
@@ -34,19 +35,33 @@ jobs:
           # Run the tests and generate reports
           ./gradlew clean test jacocoTestReport jacocoTestCoverageVerification
 
-          # Safely extract coverage value from the generated report
+          # Check if the JaCoCo report exists
+          REPORT_PATH="build/reports/jacoco/test/jacocoTestReport.xml"
+          if [ ! -f "$REPORT_PATH" ]; then
+            echo "❌ JaCoCo report not found at $REPORT_PATH"
+            exit 1
+          fi
+
+          # Debug: Output the XML file content for inspection
+          echo "Debug: JaCoCo report content"
+          cat "$REPORT_PATH"
+
+          # Extract coverage value from the report
           COVERAGE=$(awk -F'[><]' '
-            /<counter type="LINE"/ { 
-              if ($3 + $5 > 0) {
-                # Calculate coverage percentage
-                printf "%d", ($3 / ($3 + $5) * 100)
+            /<counter type="LINE"/ {
+              for (i=1; i<=NF; i++) {
+                if ($i == "covered") covered=$(i+1);
+                if ($i == "missed") missed=$(i+1);
+              }
+              if (covered + missed > 0) {
+                printf "%d", (covered / (covered + missed) * 100)
                 exit
               }
             }
             END {
-              # Default to 0 if no data is found
-              if (!NR) print "0"
-            }' build/reports/jacoco/test/jacocoTestReport.xml | tr -d '\n')
+              # Default to 0 if no valid data is found
+              print "0"
+            }' "$REPORT_PATH" | tr -d '\n')
 
           # Validate that the coverage value is numeric
           if ! [[ "$COVERAGE" =~ ^[0-9]+$ ]]; then
@@ -60,7 +75,7 @@ jobs:
           # Display the total line coverage
           echo "Total line coverage: ${COVERAGE}%"
 
-          # Only fail if the coverage is below the threshold of 80%
+          # Fail if coverage is below the threshold of 80%
           if [ "$COVERAGE" -lt 80 ]; then
             echo "❌ Coverage below required 80% threshold"
             exit 1
@@ -83,13 +98,13 @@ jobs:
             const coverage = process.env.COVERAGE_PERCENT;
             const comment = `## JaCoCo Test Coverage Report
             Total Line Coverage: **${coverage}%**
-            
+
             ${coverage >= 80 
               ? '✅ Coverage meets or exceeds the required 80% threshold. Great job!'
               : '❌ Coverage is below the required 80% threshold. Please add more tests to improve coverage.'}
-            
+
             📊 [View detailed coverage report](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})`;
-            
+
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
