@@ -1,4 +1,4 @@
-name: Test Coverage
+name: Test Coverage Enforcement
 on:
   pull_request:
     branches: [ main ]
@@ -9,13 +9,13 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
-          
+
       - name: Cache Gradle
         uses: actions/cache@v4
         with:
@@ -23,48 +23,48 @@ jobs:
             ~/.gradle/caches
             ~/.gradle/wrapper
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*') }}
-  
-      - name: Run tests
-        run: ./gradlew clean test
-      # Core coverage check (blocks merge if <80%)
-      - name: Enforce coverage
+
+      - name: Run coverage check
         run: |
           ./gradlew clean test jacocoTestCoverageVerification
           COVERAGE=$(awk -F'[><]' '
-            /<counter type="LINE"/ { cov=$3; total=$3+$5; print int(cov/total*100) }' 
-            build/reports/jacoco/test/jacocoTestReport.xml)
+            /<counter type="LINE"/ { 
+              covered=$3; missed=$5; 
+              print int(covered/(covered+missed)*100)
+            }' build/reports/jacoco/test/jacocoTestReport.xml)
           
+          echo "COVERAGE_PERCENT=$COVERAGE" >> $GITHUB_ENV
           if [ $COVERAGE -lt 80 ]; then
-            echo "❌ Coverage $COVERAGE% < 80% minimum"
+            echo "::error::Coverage too low: $COVERAGE% (<80%)"
             exit 1
           fi
 
-      # PR Comment with Coverage Badge
-      - name: Post coverage report
+      - name: Post coverage comment
         if: always()
         uses: actions/github-script@v6
+        env:
+          COVERAGE: ${{ env.COVERAGE_PERCENT }}
         with:
           script: |
-            const coverage = fs.readFileSync('build/reports/jacoco/test/jacocoTestReport.xml', 'utf8');
-            const match = coverage.match(/<counter type="LINE" missed="(\d+)" covered="(\d+)"/);
-            const percent = (match[2] / (match[1] + match[2]) * 100).toFixed(2);
+            const message = [
+              '## Test Coverage Result',
+              `✅ Line Coverage: ${process.env.COVERAGE}%`,
+              '📌 Minimum Required: 80%',
+              '',
+              process.env.COVERAGE < 80 
+                ? '❌ **Merge blocked**: Coverage below threshold'
+                : '✔️ Ready to merge!'
+            ].join('\n');
             
-            github.rest.issues.createComment({
+            await github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `### 📊 Test Coverage Report
-| Metric       | Coverage | Status  |
-|--------------|----------|---------|
-| **Lines**    | ${percent}% | ${percent >= 80 ? '✅' : '❌'} |
-| **Required** | 80%      |         |
-
-${percent < 80 ? '⚠️ **Merge blocked**: Coverage too low' : '✔️ Ready to merge!'}`
+              body: message
             });
 
-      # Upload full report (always)
-      - name: Upload coverage artifact
+      - name: Upload coverage report
         uses: actions/upload-artifact@v4
         with:
-          name: jacoco-report
+          name: coverage-report
           path: build/reports/jacoco/test/html/
