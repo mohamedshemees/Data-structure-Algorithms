@@ -1,66 +1,139 @@
-name: Enhanced CI
+name: Test Coverage Enforcement
 
 on:
-  push:
-    branches: [main, develop]
   pull_request:
-    branches: [main, develop]
-  workflow_dispatch:
-
-permissions:
-  contents: write
-  pull-requests: write
+    branches:
+      - main
 
 jobs:
-  coverage:
+  coverage-check:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write  # Required for PR comments
+
     steps:
-      - uses: actions/checkout@v4
-      
-      - uses: actions/setup-java@v4
+      # Step 1: Checkout the code
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Step 2: Make gradlew executable
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      # Step 3: Set up JDK 17
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
         with:
-          java-version: '17'
-          distribution: 'temurin'
-          cache: 'gradle'
+          java-version: "17"
+          distribution: temurin
 
-      - run: chmod +x gradlew
-      
-      - name: Run coverage checks
+      # Step 4: Run the tests and generate reports
+      - name: Run coverage check
         run: |
-          ./gradlew clean test jacocoTestReport
-          COVERAGE=$(awk -F'[><]' '
-            /<counter type="LINE"/ { 
-              if ($3+$5 > 0) printf "%.1f", ($3/($3+$5)*100)
-              else { print "0"; exit 1 }
-            }' build/reports/jacoco/test/jacocoTestReport.xml)
-          
-          echo "COVERAGE=${COVERAGE}%" >> $GITHUB_STEP_SUMMARY
-          [ $(echo "$COVERAGE >= 80" | bc) -eq 1 ] || exit 1
+          # Run the tests and generate reports
+          ./gradlew clean test jacocoTestReport jacocoTestCoverageVerification
 
-      - name: Post coverage summary
+          # Check if the JaCoCo report exists
+          REPORT_PATH="build/reports/jacoco/test/jacocoTestReport.xml"
+          if [ ! -f "$REPORT_PATH" ]; then
+            echo "❌ JaCoCo report not found at $REPORT_PATH"
+            exit 1
+          fi
+
+          # Install xmllint for XML parsing (if not already available)
+          sudo apt-get install -y libxml2-utils
+
+          # Extract coverage values using xmllint
+          LINE_COVERED=$(xmllint --xpath "string(//counter[@type='LINE']/@covered)" "$REPORT_PATH")
+          LINE_MISSED=$(xmllint --xpath "string(//counter[@type='LINE']/@missed)" "$REPORT_PATH")
+          CLASS_COVERED=$(xmllint --xpath "string(//counter[@type='CLASS']/@covered)" "$REPORT_PATH")
+          CLASS_MISSED=$(xmllint --xpath "string(//counter[@type='CLASS']/@missed)" "$REPORT_PATH")
+          BRANCH_COVERED=$(xmllint --xpath "string(//counter[@type='BRANCH']/@covered)" "$REPORT_PATH")
+          BRANCH_MISSED=$(xmllint --xpath "string(//counter[@type='BRANCH']/@missed)" "$REPORT_PATH")
+
+          # Calculate percentages
+          LINE_COVERAGE_PERCENT=$(( (LINE_COVERED * 100) / (LINE_COVERED + LINE_MISSED) ))
+          CLASS_COVERAGE_PERCENT=$(( (CLASS_COVERED * 100) / (CLASS_COVERED + CLASS_MISSED) ))
+          BRANCH_COVERAGE_PERCENT=$(( (BRANCH_COVERED * 100) / (BRANCH_COVERED + BRANCH_MISSED) ))
+
+          # Display the total line coverage (without the table in CLI)
+          echo "Total line coverage: ${LINE_COVERAGE_PERCENT}%"
+          echo "Class coverage: ${CLASS_COVERAGE_PERCENT}%"
+          echo "Branch coverage: ${BRANCH_COVERAGE_PERCENT}%"
+
+          # Set the coverage percentages as environment variables
+          echo "LINE_COVERAGE_PERCENT=${LINE_COVERAGE_PERCENT}" >> $GITHUB_ENV
+          echo "CLASS_COVERAGE_PERCENT=${CLASS_COVERAGE_PERCENT}" >> $GITHUB_ENV
+          echo "BRANCH_COVERAGE_PERCENT=${BRANCH_COVERAGE_PERCENT}" >> $GITHUB_ENV
+
+          # Fail if any coverage is below the threshold
+          if [ "$LINE_COVERAGE_PERCENT" -lt 80 ] || [ "$CLASS_COVERAGE_PERCENT" -lt 80 ] || [ "$BRANCH_COVERAGE_PERCENT" -lt 80 ]; then
+            echo "❌ Coverage below required 80% threshold"
+            exit 1
+          fi
+
+      # Step 5: Upload the coverage report as an artifact
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: build/reports/jacoco/test/html/
+
+      # Step 6: Comment on PR with coverage details
+      - name: Comment on PR with coverage
         if: github.event_name == 'pull_request'
-        uses: actions/github-script@v6
+        uses: actions/github-script@v7
         with:
           script: |
-            const coverage = fs.readFileSync(
-              'build/reports/jacoco/test/jacocoTestReport.xml', 'utf8'
-            );
-            const match = coverage.match(
-              /<counter type="LINE" missed="(\d+)" covered="(\d+)"/
-            );
-            const percent = (match[2]/(match[1]+match[2])*100).toFixed(1);
-            
-            github.rest.issues.createComment({
+            const lineCoverage = process.env.LINE_COVERAGE_PERCENT;
+            const classCoverage = process.env.CLASS_COVERAGE_PERCENT;
+            const branchCoverage = process.env.BRANCH_COVERAGE_PERCENT;
+
+            const comment = `
+            ## JaCoCo Test Coverage Report
+            | Metric              | Covered | Missed | Coverage % |
+            |---------------------|---------|--------|------------|
+            | Line Coverage       | ${lineCoverage} | ${100 - lineCoverage} | ${lineCoverage}% |
+            | Class Coverage      | ${classCoverage} | ${100 - classCoverage} | ${classCoverage}% |
+            | Branch Coverage     | ${branchCoverage} | ${100 - branchCoverage} | ${branchCoverage}% |
+
+            ${lineCoverage >= 80 && classCoverage >= 80 && branchCoverage >= 80 
+              ? '✅ Coverage meets or exceeds the required 80% threshold. Great job!'
+              : '❌ Coverage is below the required 80% threshold. Please add more tests to improve coverage.'}
+
+            📊 [View detailed coverage report](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: comment
+            });
+
+      # Step 7: Post coverage comment
+      - name: Post coverage comment
+        if: always()
+        uses: actions/github-script@v6
+        env:
+          LINE_COVERAGE: ${{ env.LINE_COVERAGE_PERCENT }}
+          CLASS_COVERAGE: ${{ env.CLASS_COVERAGE_PERCENT }}
+          BRANCH_COVERAGE: ${{ env.BRANCH_COVERAGE_PERCENT }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const message = `
+            ## 📊 Test Coverage
+            **Line Coverage:** ${process.env.LINE_COVERAGE}%
+            **Class Coverage:** ${process.env.CLASS_COVERAGE}%
+            **Branch Coverage:** ${process.env.BRANCH_COVERAGE}%
+            **Minimum Required:** 80%
+            ${process.env.LINE_COVERAGE < 80 || process.env.CLASS_COVERAGE < 80 || process.env.BRANCH_COVERAGE < 80 ? '❌ **Merge blocked**' : '✅ **Ready to merge**'}
+            `;
+            await github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: [
-                '### 🛠️ Custom Coverage Report',
-                '| Metric       | Coverage | Status  |',
-                '|--------------|----------|---------|',
-                `| **Lines**    | ${percent}% | ${percent >= 80 ? '✅' : '❌'} |`,
-                '| **Required** | 80%      |         |',
-                '',
-                percent < 80 ? '🔧 *Tip*: Run `./gradlew jacocoTestReport` locally to investigate' : ''
-              ].join('\n')
+              body: message
             });
