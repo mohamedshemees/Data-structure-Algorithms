@@ -42,28 +42,33 @@ jobs:
           # Extract coverage values using xmllint
           LINE_COVERED=$(xmllint --xpath "string(//counter[@type='LINE']/@covered)" "$REPORT_PATH")
           LINE_MISSED=$(xmllint --xpath "string(//counter[@type='LINE']/@missed)" "$REPORT_PATH")
+          INSTRUCTION_COVERED=$(xmllint --xpath "string(//counter[@type='INSTRUCTION']/@covered)" "$REPORT_PATH")
+          INSTRUCTION_MISSED=$(xmllint --xpath "string(//counter[@type='INSTRUCTION']/@missed)" "$REPORT_PATH")
           CLASS_COVERED=$(xmllint --xpath "string(//counter[@type='CLASS']/@covered)" "$REPORT_PATH")
           CLASS_MISSED=$(xmllint --xpath "string(//counter[@type='CLASS']/@missed)" "$REPORT_PATH")
           BRANCH_COVERED=$(xmllint --xpath "string(//counter[@type='BRANCH']/@covered)" "$REPORT_PATH")
           BRANCH_MISSED=$(xmllint --xpath "string(//counter[@type='BRANCH']/@missed)" "$REPORT_PATH")
 
-          # Calculate percentages
+          # Calculate percentages for instructions, lines, classes, and branches
           LINE_COVERAGE_PERCENT=$(( (LINE_COVERED * 100) / (LINE_COVERED + LINE_MISSED) ))
+          INSTRUCTION_COVERAGE_PERCENT=$(( (INSTRUCTION_COVERED * 100) / (INSTRUCTION_COVERED + INSTRUCTION_MISSED) ))
           CLASS_COVERAGE_PERCENT=$(( (CLASS_COVERED * 100) / (CLASS_COVERED + CLASS_MISSED) ))
           BRANCH_COVERAGE_PERCENT=$(( (BRANCH_COVERED * 100) / (BRANCH_COVERED + BRANCH_MISSED) ))
 
           # Display the coverage percentages
           echo "Line Coverage: ${LINE_COVERAGE_PERCENT}%"
+          echo "Instruction Coverage: ${INSTRUCTION_COVERAGE_PERCENT}%"
           echo "Class Coverage: ${CLASS_COVERAGE_PERCENT}%"
           echo "Branch Coverage: ${BRANCH_COVERAGE_PERCENT}%"
 
           # Set the coverage percentages as environment variables
           echo "LINE_COVERAGE_PERCENT=${LINE_COVERAGE_PERCENT}" >> $GITHUB_ENV
+          echo "INSTRUCTION_COVERAGE_PERCENT=${INSTRUCTION_COVERAGE_PERCENT}" >> $GITHUB_ENV
           echo "CLASS_COVERAGE_PERCENT=${CLASS_COVERAGE_PERCENT}" >> $GITHUB_ENV
           echo "BRANCH_COVERAGE_PERCENT=${BRANCH_COVERAGE_PERCENT}" >> $GITHUB_ENV
 
           # Check if coverage is below the threshold
-          if [ "$LINE_COVERAGE_PERCENT" -lt 80 ] || [ "$CLASS_COVERAGE_PERCENT" -lt 80 ] || [ "$BRANCH_COVERAGE_PERCENT" -lt 80 ]; then
+          if [ "$LINE_COVERAGE_PERCENT" -lt 80 ] || [ "$INSTRUCTION_COVERAGE_PERCENT" -lt 80 ] || [ "$CLASS_COVERAGE_PERCENT" -lt 80 ] || [ "$BRANCH_COVERAGE_PERCENT" -lt 80 ]; then
             echo "❌ Coverage below required 80% threshold"
             echo "Skipping merge"
           fi
@@ -92,19 +97,21 @@ jobs:
         with:
           script: |
             const lineCoverage = process.env.LINE_COVERAGE_PERCENT;
+            const instructionCoverage = process.env.INSTRUCTION_COVERAGE_PERCENT;
             const classCoverage = process.env.CLASS_COVERAGE_PERCENT;
             const branchCoverage = process.env.BRANCH_COVERAGE_PERCENT;
-            const coverageUrl = `https://mohamedshemees.io/Data-structure-Algorithms/`; // GitHub Pages URL
+            const coverageUrl = `https://mohamedshemees.github.io//Data-structure-Algorithms/`; // GitHub Pages URL
 
             const comment = `
             ## JaCoCo Test Coverage Report
             | Metric              | Covered | Missed | Coverage % |
             |---------------------|---------|--------|------------|
             | Line Coverage       | ${lineCoverage} | ${100 - lineCoverage} | ${lineCoverage}% |
+            | Instruction Coverage| ${instructionCoverage} | ${100 - instructionCoverage} | ${instructionCoverage}% |
             | Class Coverage      | ${classCoverage} | ${100 - classCoverage} | ${classCoverage}% |
             | Branch Coverage     | ${branchCoverage} | ${100 - branchCoverage} | ${branchCoverage}% |
 
-            ${lineCoverage >= 80 && classCoverage >= 80 && branchCoverage >= 80 
+            ${lineCoverage >= 80 && instructionCoverage >= 80 && classCoverage >= 80 && branchCoverage >= 80 
               ? '✅ Coverage meets or exceeds the required 80% threshold. Great job!'
               : '❌ Coverage is below the required 80% threshold. Please add more tests to improve coverage.'}
 
