@@ -23,7 +23,9 @@ jobs:
             ~/.gradle/caches
             ~/.gradle/wrapper
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*') }}
-          
+  
+      - name: Run tests
+        run: ./gradlew clean test
       # Core coverage check (blocks merge if <80%)
       - name: Enforce coverage
         run: |
