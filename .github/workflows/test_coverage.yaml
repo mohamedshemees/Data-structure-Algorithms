@@ -1,17 +1,19 @@
-name: Test Coverage Enforcement
+name: Test and Coverage Check
 
 on:
   pull_request:
     branches:
       - main
+      - develop
 
 jobs:
-  coverage-check:
+  test-and-generate-report:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write  # Required for PR comments
-
+      pull-requests: write
+    outputs:
+      tests_passed: ${{ steps.test.outcome }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -25,46 +27,55 @@ jobs:
           java-version: "17"
           distribution: temurin
 
-      - name: Run tests and generate reports
-        id: test_and_coverage
+      - name: Run tests
+        id: test
         run: |
-          set +e
-          ./gradlew clean test jacocoTestReport jacocoTestCoverageVerification
-          echo "EXIT_CODE=$?" >> $GITHUB_ENV
-          set -e
+          ./gradlew clean test jacocoTestReport
 
-      - name: Check if tests failed
-        if: env.EXIT_CODE != '0'
+      - name: Comment if tests failed
+        if: failure()
         uses: actions/github-script@v7
         with:
           script: |
-            const message = `
-            ## ❌ Test Failure
-            Some tests failed. Please fix the issues before we can check coverage.
-            `;
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: message
+              body: "❌ Some tests failed. Please fix the tests."
             });
-          github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Fail if tests failed
-        if: env.EXIT_CODE != '0'
-        run: exit 1
+  check-coverage:
+    needs: test-and-generate-report
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    if: ${{ needs.test-and-generate-report.result == 'success' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Parse JaCoCo report and set coverage values
-        if: env.EXIT_CODE == '0'
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: temurin
+
+      - name: Generate coverage verification
+        id: coverage
+        continue-on-error: true
         run: |
-          sudo apt-get install -y libxml2-utils
+          ./gradlew jacocoTestCoverageVerification
 
+      - name: Parse coverage report
+        run: |
           REPORT_PATH="build/reports/jacoco/test/jacocoTestReport.xml"
-
           if [ ! -f "$REPORT_PATH" ]; then
             echo "❌ JaCoCo report not found!"
             exit 1
           fi
+
+          sudo apt-get install -y libxml2-utils
 
           LINE_COVERED=$(xmllint --xpath "string(//counter[@type='LINE']/@covered)" "$REPORT_PATH")
           LINE_MISSED=$(xmllint --xpath "string(//counter[@type='LINE']/@missed)" "$REPORT_PATH")
@@ -81,8 +92,7 @@ jobs:
           echo "CLASS_COVERAGE_PERCENT=${CLASS_COVERAGE_PERCENT}" >> $GITHUB_ENV
           echo "BRANCH_COVERAGE_PERCENT=${BRANCH_COVERAGE_PERCENT}" >> $GITHUB_ENV
 
-      - name: Comment coverage on PR
-        if: env.EXIT_CODE == '0'
+      - name: Comment on PR with coverage result
         uses: actions/github-script@v7
         with:
           script: |
@@ -90,19 +100,19 @@ jobs:
             const classCoverage = process.env.CLASS_COVERAGE_PERCENT;
             const branchCoverage = process.env.BRANCH_COVERAGE_PERCENT;
 
-            const meetsThreshold = lineCoverage >= 80 && classCoverage >= 80 && branchCoverage >= 80;
-
             const comment = `
-            ## 📊 JaCoCo Test Coverage Report
-            | Metric         | Coverage % |
-            |----------------|------------|
-            | Line Coverage  | ${lineCoverage}% |
-            | Class Coverage | ${classCoverage}% |
-            | Branch Coverage| ${branchCoverage}% |
+            ## 🛡️ JaCoCo Test Coverage Report
+            | Metric          | Coverage % |
+            |-----------------|------------|
+            | Line Coverage   | ${lineCoverage}% |
+            | Class Coverage  | ${classCoverage}% |
+            | Branch Coverage | ${branchCoverage}% |
 
-            ${meetsThreshold ? '✅ Coverage meets required 80% threshold!' : '❌ Coverage below 80%, please improve tests.'}
+            ${lineCoverage >= 80 && classCoverage >= 80 && branchCoverage >= 80
+              ? '✅ **Coverage is above 80%. Ready to merge!**'
+              : '❌ **Coverage is below 80%. Please add more tests before merging.**'}
 
-            📋 [View detailed report](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            📊 [View full report](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
             `;
 
             await github.rest.issues.createComment({
@@ -111,5 +121,10 @@ jobs:
               issue_number: context.issue.number,
               body: comment
             });
-          github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Fail if coverage too low
+        run: |
+          if [ "$LINE_COVERAGE_PERCENT" -lt 80 ] || [ "$CLASS_COVERAGE_PERCENT" -lt 80 ] || [ "$BRANCH_COVERAGE_PERCENT" -lt 80 ]; then
+            echo "❌ Coverage below threshold. Failing."
+            exit 1
+          fi
