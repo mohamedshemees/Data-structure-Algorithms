@@ -17,14 +17,6 @@ tasks.jacocoTestReport {
 }
 
 
-tasks.jacocoTestReport {
-    dependsOn(tasks.test)
-    reports {
-        xml.required = true
-        csv.required = true
-    }
-}
-
 tasks.jacocoTestCoverageVerification {
     violationRules {
         classDirectories.setFrom(
