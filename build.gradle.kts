@@ -33,6 +33,7 @@ tasks.test {
 tasks.jacocoTestReport {
     dependsOn(tasks.test)
 
+    // Get the tested production classes
     val includedClasses = findTestedProductionClasses()
 
     classDirectories.setFrom(
@@ -59,23 +60,19 @@ tasks.jacocoTestReport {
 tasks.jacocoTestCoverageVerification {
     dependsOn(tasks.jacocoTestReport)
 
-    // Get the test classes and map them to production classes
-    val testClasses = fileTree("$buildDir/classes/kotlin/test")
-        .matching { include("**/*Test.class") }
-        .files
-        .map { it.name.removeSuffix("Test.class") }
+    // Use the same includedClasses for verification as in the report
+    val includedClasses = findTestedProductionClasses()
 
-    // Include only production classes that have corresponding test classes
     classDirectories.setFrom(
-        fileTree("$buildDir/classes/kotlin/main").matching {
-            include(testClasses.map { "**/$it.class" })
+        fileTree("$buildDir/classes/kotlin/main") {
+            include(includedClasses)
         }
     )
 
     violationRules {
         rule {
             element = "CLASS"
-            includes = testClasses.map { "$it" }  
+            includes = includedClasses // Apply to all classes in the tested list
             limit {
                 counter = "LINE"
                 minimum = "0.80".toBigDecimal()  // 80% minimum coverage
@@ -87,8 +84,6 @@ tasks.jacocoTestCoverageVerification {
 tasks.check {
     dependsOn(tasks.jacocoTestCoverageVerification)
 }
-
-
 
 group = "org.example"
 version = "1.0-SNAPSHOT"
