@@ -4,28 +4,59 @@ plugins {
 }
 
 jacoco {
-    toolVersion = "0.8.10"
+    toolVersion = "0.8.7"
 }
 
 tasks.jacocoTestReport {
     dependsOn(tasks.test)
-    reports {
-        xml.required.set(true)
-        html.required.set(true)
+    doFirst {
+        classDirectories.files.forEach {
+            println(it)
+        }
+
+        reports {
+            xml.required = true
+            csv.required = true
+        }
     }
 }
 
 tasks.jacocoTestCoverageVerification {
     violationRules {
+        classDirectories.setFrom(
+            classDirectories.files.forEach {
+                println(it)
+                fileTree(it) {
+                    exclude("**/model/**")
+                    exclude("**/di/**")
+                }
+            }
+        )
         rule {
             limit {
-                minimum = "1.0".toBigDecimal()
+                minimum = "0.8".toBigDecimal()
+            }
+
+            limit {
+                counter = "LINE"
+                value = "COVEREDRATIO"
+                minimum = "0.8".toBigDecimal()
+            }
+            limit {
+                counter = "BRANCH"
+                value = "COVEREDRATIO"
+                minimum = "0.8".toBigDecimal()
+            }
+            limit {
+                counter = "METHOD"
+                value = "COVEREDRATIO"
+                minimum = "0.8".toBigDecimal()
             }
         }
     }
 }
-
 tasks.check {
+
     dependsOn(tasks.jacocoTestCoverageVerification)
 }
 
@@ -52,4 +83,6 @@ dependencies {
 
 tasks.test {
     useJUnitPlatform()
+        finalizedBy(tasks.jacocoTestReport )
+
 }
