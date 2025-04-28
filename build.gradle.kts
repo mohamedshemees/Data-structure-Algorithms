@@ -69,19 +69,22 @@ tasks.jacocoTestCoverageVerification {
         }
     )
 
-    violationRules {
+  violationRules {
         rule {
             limit {
-                counter = "LINE"
-                minimum = "0.8".toBigDecimal()
+                counter = 'LINE'
+                value = 'COVEREDRATIO'
+                minimum = 0.80
             }
             limit {
-                counter = "BRANCH"
-                minimum = "0.8".toBigDecimal()
+                counter = 'CLASS'
+                value = 'COVEREDRATIO'
+                minimum = 0.80
             }
             limit {
-                value = "COVEREDRATIO"
-                minimum = "0.8".toBigDecimal()
+                counter = 'BRANCH'
+                value = 'COVEREDRATIO'
+                minimum = 0.80
             }
         }
     }
