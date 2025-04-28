@@ -35,7 +35,7 @@ jobs:
           restore-keys: |
             xmlstarlet-${{ runner.os }}-
 
-      # Step 4: Install xmlstarlet if not found
+      # Step 4: Install xmlstarlet if not present
       - name: Install xmlstarlet if not present
         run: |
           if ! command -v xmlstarlet &> /dev/null; then
