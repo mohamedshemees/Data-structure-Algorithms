@@ -24,7 +24,7 @@ jobs:
           java-version: "17"
           distribution: temurin
 
-      # Step 4: Run the tests and generate reports
+      # Step 4: Run tests and generate reports
       - name: Run tests and generate reports
         run: |
           ./gradlew clean test jacocoTestReport jacocoTestCoverageVerification
@@ -94,7 +94,7 @@ jobs:
             const lineCoverage = process.env.LINE_COVERAGE_PERCENT;
             const classCoverage = process.env.CLASS_COVERAGE_PERCENT;
             const branchCoverage = process.env.BRANCH_COVERAGE_PERCENT;
-            const coverageUrl = `https:/mohamedshemees.github.io/Data-structure-Algorithms /`; // GitHub Pages URL
+            const coverageUrl = `https://mohamedshemees.github.io//Data-structure-Algorithms/`; // GitHub Pages URL
 
             const comment = `
             ## JaCoCo Test Coverage Report
@@ -110,9 +110,11 @@ jobs:
 
             📊 [View detailed coverage report](${coverageUrl})`;
 
-            await github.rest.issues.createComment({
+            const result = await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
               body: comment
             });
+
+            console.log('PR comment created: ', result.data.html_url);
