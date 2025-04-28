@@ -10,123 +10,104 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write  # Required for PR comments
+      pull-requests: write
 
     steps:
       # Step 1: Checkout the code
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Step 2: Make gradlew executable
-      - name: Make gradlew executable
-        run: chmod +x ./gradlew
-
-      # Step 3: Set up JDK 17
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+      # Step 2: Cache Gradle dependencies
+      - name: Cache Gradle dependencies
+        uses: actions/cache@v3
         with:
-          java-version: "17"
-          distribution: temurin
+          path: ~/.gradle/caches
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
 
-      # Step 4: Install dependencies and cache them
-      - name: Install xmlstarlet and cache dependencies
+      # Step 3: Cache xmlstarlet
+      - name: Cache xmlstarlet
+        uses: actions/cache@v3
+        with:
+          path: /usr/local/bin/xmlstarlet
+          key: xmlstarlet-${{ runner.os }}
+          restore-keys: |
+            xmlstarlet-${{ runner.os }}-
+
+      # Step 4: Install xmlstarlet if not found
+      - name: Install xmlstarlet if not present
         run: |
-          # Install xmlstarlet if not already installed
           if ! command -v xmlstarlet &> /dev/null; then
-            sudo apt-get update
+            echo "xmlstarlet not found, installing..."
             sudo apt-get install -y xmlstarlet
           fi
 
-      - name: Cache xmlstarlet dependencies
-        uses: actions/cache@v3
-        with:
-          path: /usr/bin/xmlstarlet
-          key: ${{ runner.os }}-xmlstarlet-${{ hashFiles('**/*.xml') }}
-          restore-keys: |
-            ${{ runner.os }}-xmlstarlet-
-
-      # Step 5: Run the tests and generate reports
+      # Step 5: Run tests and generate reports
       - name: Run coverage check
         id: coverage
         run: |
           # Run the tests and generate reports
-          ./gradlew clean test jacocoTestReport jacocoTestCoverageVerification || true
+          ./gradlew clean test jacocoTestReport jacocoTestCoverageVerification
 
-          # Check if the JaCoCo report exists
+          # Check if tests failed
+          TEST_FAILED=$(grep -i "FAILURE" build/reports/tests/test/index.html)
+
+          if [[ -n "$TEST_FAILED" ]]; then
+            # Comment if there are test failures
+            COMMENT="## Test Failures
+There are failing tests in this run. Please check the logs and fix the issues. ❌"
+            curl -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -d "{\"body\": \"$COMMENT\"}" \
+              "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments"
+            exit 1
+          fi
+
+          # If tests pass, proceed to check JaCoCo coverage
           REPORT_PATH="build/reports/jacoco/test/jacocoTestReport.xml"
           if [ ! -f "$REPORT_PATH" ]; then
             echo "❌ JaCoCo report not found at $REPORT_PATH"
-            echo "coverage_check_failed=true" >> $GITHUB_ENV
-            COVERAGE_PERCENT=0  # Default coverage if report is missing
-          else
-            # Extract coverage value from the report using xmlstarlet
-            COVERAGE=$(xmlstarlet sel -t -v "sum(@covered)" "$REPORT_PATH")
-            MISSED=$(xmlstarlet sel -t -v "sum(@missed)" "$REPORT_PATH")
-            
-            # Calculate total coverage percentage
-            TOTAL=$(($COVERAGE + $MISSED))
-            if [ "$TOTAL" -eq 0 ]; then
-              COVERAGE_PERCENT=0
-            else
-              COVERAGE_PERCENT=$((($COVERAGE * 100) / $TOTAL))
-            fi
+            exit 1
           fi
 
-          # Set the coverage percentage as an environment variable
-          echo "COVERAGE_PERCENT=${COVERAGE_PERCENT}" >> $GITHUB_ENV
-          echo "Total line coverage: ${COVERAGE_PERCENT}%"
+          # Extract coverage values (Line, Class, Branch)
+          COVERAGE_LINE=$(xmlstarlet sel -t -m "//counter[@type='LINE']" -v "@covered" "$REPORT_PATH")
+          COVERAGE_CLASS=$(xmlstarlet sel -t -m "//counter[@type='CLASS']" -v "@covered" "$REPORT_PATH")
+          COVERAGE_BRANCH=$(xmlstarlet sel -t -m "//counter[@type='BRANCH']" -v "@covered" "$REPORT_PATH")
 
-          # Check if there are any test failures (search for "FAILED" in the test report)
-          if [ $(grep -c "FAILED" build/reports/tests/test/index.html) -gt 0 ]; then
-            echo "❌ There are failed tests. Please check the test results."
-            echo "tests_failed=true" >> $GITHUB_ENV
-          else
-            echo "tests_failed=false" >> $GITHUB_ENV
+          # Comment with coverage data in a neat table
+          COMMENT="## JaCoCo Test Coverage Report
+
+| Metric               | Percentage |
+|----------------------|------------|
+| **Line Coverage**     | **${COVERAGE_LINE}%**  |
+| **Class Coverage**    | **${COVERAGE_CLASS}%** |
+| **Branch Coverage**   | **${COVERAGE_BRANCH}%**|
+
+✅ Coverage meets the required 80% threshold. Great job!"
+
+          if [[ "$COVERAGE_LINE" -lt 80 ]]; then
+            COMMENT="## JaCoCo Test Coverage Report
+
+| Metric               | Percentage |
+|----------------------|------------|
+| **Line Coverage**     | **${COVERAGE_LINE}%**  |
+| **Class Coverage**    | **${COVERAGE_CLASS}%** |
+| **Branch Coverage**   | **${COVERAGE_BRANCH}%**|
+
+❌ Coverage below 80%. Please add more tests or improve coverage."
+
           fi
 
-      # Step 6: Upload the coverage report as an artifact (even if not found)
+          # Create a comment on PR
+          curl -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -d "{\"body\": \"$COMMENT\"}" \
+            "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments"
+
+      # Step 6: Upload coverage report (if needed)
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
           path: build/reports/jacoco/test/html/
-
-      # Step 7: Comment on PR with coverage and test result details
-      - name: Comment on PR with results
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const coverage = process.env.COVERAGE_PERCENT;
-            const testsFailed = process.env.tests_failed;
-            const coverageStatus = coverage >= 80
-              ? '✅ Coverage meets or exceeds the required 80% threshold. Great job!'
-              : '❌ Coverage is below the required 80% threshold. Please add more tests to improve coverage.';
-            
-            const testStatus = testsFailed === 'true'
-              ? '❌ There are **failed tests**. Please check the test results.'
-              : '✅ All tests passed successfully.';
-
-            const comment = `
-            ## JaCoCo Test Coverage Report
-            Total Line Coverage: **${coverage}%**
-            ${coverageStatus}
-            ${testStatus}
-
-            📊 [View detailed coverage report](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-            `;
-
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: comment
-            });
-
-      # Step 8: Exit with failure if tests failed or coverage below threshold
-      - name: Fail the job if conditions are not met
-        run: |
-          if [ "$COVERAGE_PERCENT" -lt 80 ] || [ "$tests_failed" == "true" ]; then
-            exit 1
-          fi
