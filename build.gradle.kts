@@ -118,5 +118,7 @@ dependencies {
 
 tasks.test {
     useJUnitPlatform()
-    finalizedBy(tasks.jacocoTestReport) // Ensure report is generated after tests
-}
+    testLogging {
+        events ("passed", "skipped", "failed")
+        showStandardStreams = true
+    }
