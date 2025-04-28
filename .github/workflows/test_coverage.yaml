@@ -1,125 +1,119 @@
-name: Test Coverage Enforcement
+name: Test and Coverage Check
 
 on:
   pull_request:
     branches:
       - main
+      - develop
 
 jobs:
-  test:
+  test-and-coverage:
+    name: Run tests and verify coverage
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
 
     steps:
-      # Step 1: Checkout the code
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Step 2: Make gradlew executable
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
-      # Step 3: Set up JDK 17
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: "17"
           distribution: temurin
 
-      # Step 4: Run tests and generate coverage report
-      - name: Run tests and generate coverage report
+      - name: Run tests
+        id: run_tests
+        continue-on-error: true
         run: |
           ./gradlew clean test jacocoTestReport
 
-      # Step 5: Upload the coverage report as an artifact
-      - name: Upload coverage report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report
-          path: build/reports/jacoco/test/html/
-
-  coverage:
-    runs-on: ubuntu-latest
-    needs: test
-
-    steps:
-      # Step 1: Checkout the code (if not already done in previous job)
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      # Step 2: Install xmllint for parsing the JaCoCo XML
-      - name: Install xmllint
-        run: sudo apt-get install -y libxml2-utils
-
-      # Step 3: Parse the JaCoCo report for coverage percentages
-      - name: Parse coverage percentages
-        id: parse_coverage
-        run: |
-          REPORT_PATH="build/reports/jacoco/test/jacocoTestReport.xml"
-          if [ ! -f "$REPORT_PATH" ]; then
-            echo "❌ JaCoCo report not found at $REPORT_PATH"
-            exit 1
-          fi
-
-          # Extract coverage values using xmllint
-          LINE_COVERED=$(xmllint --xpath "string(//counter[@type='LINE']/@covered)" "$REPORT_PATH")
-          LINE_MISSED=$(xmllint --xpath "string(//counter[@type='LINE']/@missed)" "$REPORT_PATH")
-          CLASS_COVERED=$(xmllint --xpath "string(//counter[@type='CLASS']/@covered)" "$REPORT_PATH")
-          CLASS_MISSED=$(xmllint --xpath "string(//counter[@type='CLASS']/@missed)" "$REPORT_PATH")
-          BRANCH_COVERED=$(xmllint --xpath "string(//counter[@type='BRANCH']/@covered)" "$REPORT_PATH")
-          BRANCH_MISSED=$(xmllint --xpath "string(//counter[@type='BRANCH']/@missed)" "$REPORT_PATH")
-
-          # Calculate coverage percentages
-          LINE_COVERAGE_PERCENT=$(( (LINE_COVERED * 100) / (LINE_COVERED + LINE_MISSED) ))
-          CLASS_COVERAGE_PERCENT=$(( (CLASS_COVERED * 100) / (CLASS_COVERED + CLASS_MISSED) ))
-          BRANCH_COVERAGE_PERCENT=$(( (BRANCH_COVERED * 100) / (BRANCH_COVERED + BRANCH_MISSED) ))
-
-          # Save percentages as environment variables
-          echo "LINE_COVERAGE_PERCENT=${LINE_COVERAGE_PERCENT}" >> $GITHUB_ENV
-          echo "CLASS_COVERAGE_PERCENT=${CLASS_COVERAGE_PERCENT}" >> $GITHUB_ENV
-          echo "BRANCH_COVERAGE_PERCENT=${BRANCH_COVERAGE_PERCENT}" >> $GITHUB_ENV
-
-      # Step 4: Post coverage comment
-      - name: Post coverage comment
-        if: always()
+      - name: Handle test failures
+        if: steps.run_tests.outcome != 'success'
         uses: actions/github-script@v7
         with:
           script: |
-            const lineCoverage = process.env.LINE_COVERAGE_PERCENT;
-            const classCoverage = process.env.CLASS_COVERAGE_PERCENT;
-            const branchCoverage = process.env.BRANCH_COVERAGE_PERCENT;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: "❌ **Tests failed. Please fix them before merging.**\n\n[View Coverage Report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+            });
+            core.setFailed('Tests failed.')
 
-            let coverageStatus = "✅ Coverage meets or exceeds the required 80% threshold. Great job!";
-            let mergeStatus = "";
+      - name: Upload coverage report
+        if: steps.run_tests.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: build/reports/jacoco/test/jacocoTestReport.xml
 
-            if (lineCoverage < 80 || classCoverage < 80 || branchCoverage < 80) {
-              coverageStatus = "❌ Coverage is below the required 80% threshold. Please add more tests to improve coverage.";
-              mergeStatus = "❌ Skipping merge due to insufficient coverage!";
+      - name: Install xmllint
+        if: steps.run_tests.outcome == 'success'
+        run: sudo apt-get install -y libxml2-utils
+
+      - name: Check coverage
+        if: steps.run_tests.outcome == 'success'
+        id: check_coverage
+        run: |
+          REPORT_PATH="build/reports/jacoco/test/jacocoTestReport.xml"
+          if [ ! -f "$REPORT_PATH" ]; then
+            echo "❌ Coverage report not found."
+            echo "coverage_found=false" >> $GITHUB_ENV
+            exit 1
+          fi
+
+          LINE_COVERED=$(xmllint --xpath "string(//counter[@type='LINE']/@covered)" "$REPORT_PATH")
+          LINE_MISSED=$(xmllint --xpath "string(//counter[@type='LINE']/@missed)" "$REPORT_PATH")
+          BRANCH_COVERED=$(xmllint --xpath "string(//counter[@type='BRANCH']/@covered)" "$REPORT_PATH")
+          BRANCH_MISSED=$(xmllint --xpath "string(//counter[@type='BRANCH']/@missed)" "$REPORT_PATH")
+          CLASS_COVERED=$(xmllint --xpath "string(//counter[@type='CLASS']/@covered)" "$REPORT_PATH")
+          CLASS_MISSED=$(xmllint --xpath "string(//counter[@type='CLASS']/@missed)" "$REPORT_PATH")
+
+          LINE_COVERAGE=$(( (LINE_COVERED * 100) / (LINE_COVERED + LINE_MISSED) ))
+          BRANCH_COVERAGE=$(( (BRANCH_COVERED * 100) / (BRANCH_COVERED + BRANCH_MISSED) ))
+          CLASS_COVERAGE=$(( (CLASS_COVERED * 100) / (CLASS_COVERED + CLASS_MISSED) ))
+
+          echo "LINE_COVERAGE=$LINE_COVERAGE" >> $GITHUB_ENV
+          echo "BRANCH_COVERAGE=$BRANCH_COVERAGE" >> $GITHUB_ENV
+          echo "CLASS_COVERAGE=$CLASS_COVERAGE" >> $GITHUB_ENV
+
+      - name: Comment coverage result
+        if: steps.run_tests.outcome == 'success'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const line = process.env.LINE_COVERAGE;
+            const branch = process.env.BRANCH_COVERAGE;
+            const classCoverage = process.env.CLASS_COVERAGE;
+
+            let message = `
+            ## 📊 JaCoCo Coverage Report
+            | Metric        | Coverage % |
+            |---------------|------------|
+            | Line Coverage | ${line}% |
+            | Branch Coverage | ${branch}% |
+            | Class Coverage | ${classCoverage}% |
+            `;
+
+            // Add the link to the coverage report in both success and failure cases
+            const coverageReportLink = `[View Coverage Report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})`;
+
+            if (line < 80 || branch < 80 || classCoverage < 80) {
+              message += '\n❌ **Coverage below 80%, please improve it before merging.**\n' + coverageReportLink;
+              core.setFailed('Coverage below 80%');
+            } else {
+              message += '\n✅ **Coverage meets minimum 80% requirement. Good job!**\n' + coverageReportLink;
             }
-
-            const comment = `
-            ## JaCoCo Test Coverage Report
-            | Metric              | Covered | Missed | Coverage % |
-            |---------------------|---------|--------|------------|
-            | Line Coverage       | ${lineCoverage} | ${100 - lineCoverage} | ${lineCoverage}% |
-            | Class Coverage      | ${classCoverage} | ${100 - classCoverage} | ${classCoverage}% |
-            | Branch Coverage     | ${branchCoverage} | ${100 - branchCoverage} | ${branchCoverage}% |
-
-            ${coverageStatus}
-
-            ${mergeStatus}
-
-            📊 [View detailed coverage report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})`;
 
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: comment
+              body: message
             });
-
-      # Step 5: Exit gracefully without failure
-      - name: Final step (no exit)
-        if: always()
-        run: |
-          echo "Test run completed, coverage processed, and comment posted if necessary."
