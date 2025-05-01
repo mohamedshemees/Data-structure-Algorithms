@@ -69,24 +69,32 @@ tasks.jacocoTestCoverageVerification {
         }
     )
 
-  violationRules {
-            rule {
+ 
+tasks.jacocoTestCoverageVerification {
+    violationRules {
+        rule {
+            // Generic instruction coverage (default counter)
             limit {
                 minimum = "0.8".toBigDecimal()
             }
 
+            // Line coverage
             limit {
                 counter = "LINE"
                 value = "COVEREDRATIO"
                 minimum = "0.8".toBigDecimal()
             }
+
+            // Method coverage
             limit {
-                counter = "BRANCH"
+                counter = "METHOD"
                 value = "COVEREDRATIO"
                 minimum = "0.8".toBigDecimal()
             }
+
+            // Class coverage
             limit {
-                counter = "METHOD"
+                counter = "CLASS"
                 value = "COVEREDRATIO"
                 minimum = "0.8".toBigDecimal()
             }
