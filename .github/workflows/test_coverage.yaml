@@ -67,53 +67,62 @@ jobs:
             echo "coverage_found=false" >> $GITHUB_ENV
             exit 1
           fi
-      
-          LINE_COVERED=$(xmllint --xpath "string(//counter[@type='LINE']/@covered)" "$REPORT_PATH")
-          LINE_MISSED=$(xmllint --xpath "string(//counter[@type='LINE']/@missed)" "$REPORT_PATH")        
-          CLASS_COVERED=$(xmllint --xpath "string(//counter[@type='CLASS']/@covered)" "$REPORT_PATH")
-          CLASS_MISSED=$(xmllint --xpath "string(//counter[@type='CLASS']/@missed)" "$REPORT_PATH")
-          METHOD_COVERED=$(xmllint --xpath "string(//counter[@type='METHOD']/@covered)" "$REPORT_PATH")
-          METHOD_MISSED=$(xmllint --xpath "string(//counter[@type='METHOD']/@missed)" "$REPORT_PATH")
-      
-          LINE_COVERAGE=$(( (LINE_COVERED * 100) / (LINE_COVERED + LINE_MISSED) ))     
-          CLASS_COVERAGE=$(( (CLASS_COVERED * 100) / (CLASS_COVERED + CLASS_MISSED) ))
-          METHOD_COVERAGE=$(( (METHOD_COVERED * 100) / (METHOD_COVERED + METHOD_MISSED) ))
-      
+
+          extract_coverage() {
+            local type=$1
+            local covered=$(xmllint --xpath "string(//counter[@type='$type']/@covered)" "$REPORT_PATH")
+            local missed=$(xmllint --xpath "string(//counter[@type='$type']/@missed)" "$REPORT_PATH")
+            echo $(( (covered * 100) / (covered + missed) ))
+          }
+
+          INSTRUCTION_COVERAGE=$(extract_coverage "INSTRUCTION")
+          LINE_COVERAGE=$(extract_coverage "LINE")
+          METHOD_COVERAGE=$(extract_coverage "METHOD")
+          CLASS_COVERAGE=$(extract_coverage "CLASS")
+
+          echo "INSTRUCTION_COVERAGE=$INSTRUCTION_COVERAGE" >> $GITHUB_ENV
           echo "LINE_COVERAGE=$LINE_COVERAGE" >> $GITHUB_ENV
-          echo "CLASS_COVERAGE=$CLASS_COVERAGE" >> $GITHUB_ENV
           echo "METHOD_COVERAGE=$METHOD_COVERAGE" >> $GITHUB_ENV
+          echo "CLASS_COVERAGE=$CLASS_COVERAGE" >> $GITHUB_ENV
 
       - name: Comment coverage result
         if: steps.run_tests.outcome == 'success'
         uses: actions/github-script@v7
         with:
           script: |
+            const instruction = process.env.INSTRUCTION_COVERAGE;
             const line = process.env.LINE_COVERAGE;
+            const method = process.env.METHOD_COVERAGE;
             const classCoverage = process.env.CLASS_COVERAGE;
-            const methodCoverage = process.env.METHOD_COVERAGE;
-            const artifactUrl = `https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}`; // or your own link to uploaded HTML
-            
-                  let message = `
+            const artifactUrl = `https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}`;
+
+            let message = `
             ## 📊 JaCoCo Coverage Report
-            | Metric            | Covered % |
-            |-------------------|-----------|
-            | Line Coverage     | ${line}%  |
-            | Class Coverage    | ${classCoverage}% |
-            | Method Coverage   | ${methodCoverage}% |
-            
+            | Metric               | Covered % |
+            |----------------------|-----------|
+            | Instruction Coverage | ${instruction}% |
+            | Line Coverage        | ${line}% |
+            | Method Coverage      | ${method}% |
+            | Class Coverage       | ${classCoverage}% |
+
             [🔗 View Detailed Coverage Report](${artifactUrl})
             `;
-            
-                  if (line < 80 || classCoverage < 80 || methodCoverage < 80) {
-                    message += '\n❌ **Coverage below 80%, please improve it before merging.**';
-                    core.setFailed('Coverage below 80%');
-                  } else {
-                    message += '\n✅ **Coverage meets minimum 80% requirement. Good job!**';
-                  }
-            
-                  await github.rest.issues.createComment({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    issue_number: context.issue.number,
-                    body: message
-                  });
+
+            if (
+              instruction < 80 ||
+              line < 80 ||
+              method < 80 ||
+              classCoverage < 80
+            ) {
+              message += '\n❌ **Coverage below 80%, please improve it before merging.**';
+              core.setFailed('Coverage below 80%');
+            } else {
+              message += '\n✅ **Coverage meets minimum 80% requirement. Good job!**';
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: message
+            });
