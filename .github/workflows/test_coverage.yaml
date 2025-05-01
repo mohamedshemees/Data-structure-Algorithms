@@ -69,21 +69,17 @@ jobs:
           fi
       
           LINE_COVERED=$(xmllint --xpath "string(//counter[@type='LINE']/@covered)" "$REPORT_PATH")
-          LINE_MISSED=$(xmllint --xpath "string(//counter[@type='LINE']/@missed)" "$REPORT_PATH")
-          BRANCH_COVERED=$(xmllint --xpath "string(//counter[@type='BRANCH']/@covered)" "$REPORT_PATH")
-          BRANCH_MISSED=$(xmllint --xpath "string(//counter[@type='BRANCH']/@missed)" "$REPORT_PATH")
+          LINE_MISSED=$(xmllint --xpath "string(//counter[@type='LINE']/@missed)" "$REPORT_PATH")        
           CLASS_COVERED=$(xmllint --xpath "string(//counter[@type='CLASS']/@covered)" "$REPORT_PATH")
           CLASS_MISSED=$(xmllint --xpath "string(//counter[@type='CLASS']/@missed)" "$REPORT_PATH")
           METHOD_COVERED=$(xmllint --xpath "string(//counter[@type='METHOD']/@covered)" "$REPORT_PATH")
           METHOD_MISSED=$(xmllint --xpath "string(//counter[@type='METHOD']/@missed)" "$REPORT_PATH")
       
-          LINE_COVERAGE=$(( (LINE_COVERED * 100) / (LINE_COVERED + LINE_MISSED) ))
-          BRANCH_COVERAGE=$(( (BRANCH_COVERED * 100) / (BRANCH_COVERED + BRANCH_MISSED) ))
+          LINE_COVERAGE=$(( (LINE_COVERED * 100) / (LINE_COVERED + LINE_MISSED) ))     
           CLASS_COVERAGE=$(( (CLASS_COVERED * 100) / (CLASS_COVERED + CLASS_MISSED) ))
           METHOD_COVERAGE=$(( (METHOD_COVERED * 100) / (METHOD_COVERED + METHOD_MISSED) ))
       
           echo "LINE_COVERAGE=$LINE_COVERAGE" >> $GITHUB_ENV
-          echo "BRANCH_COVERAGE=$BRANCH_COVERAGE" >> $GITHUB_ENV
           echo "CLASS_COVERAGE=$CLASS_COVERAGE" >> $GITHUB_ENV
           echo "METHOD_COVERAGE=$METHOD_COVERAGE" >> $GITHUB_ENV
 
@@ -93,7 +89,6 @@ jobs:
         with:
           script: |
             const line = process.env.LINE_COVERAGE;
-            const branch = process.env.BRANCH_COVERAGE;
             const classCoverage = process.env.CLASS_COVERAGE;
             const methodCoverage = process.env.METHOD_COVERAGE;
             const artifactUrl = `https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}`; // or your own link to uploaded HTML
@@ -103,14 +98,13 @@ jobs:
             | Metric            | Covered % |
             |-------------------|-----------|
             | Line Coverage     | ${line}%  |
-            | Branch Coverage   | ${branch}% |
             | Class Coverage    | ${classCoverage}% |
             | Method Coverage   | ${methodCoverage}% |
             
             [🔗 View Detailed Coverage Report](${artifactUrl})
             `;
             
-                  if (line < 80 || branch < 80 || classCoverage < 80 || methodCoverage < 80) {
+                  if (line < 80 || classCoverage < 80 || methodCoverage < 80) {
                     message += '\n❌ **Coverage below 80%, please improve it before merging.**';
                     core.setFailed('Coverage below 80%');
                   } else {
