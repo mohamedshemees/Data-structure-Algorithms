@@ -68,9 +68,6 @@ tasks.jacocoTestCoverageVerification {
             include(includedClasses)
         }
     )
-
- 
-tasks.jacocoTestCoverageVerification {
     violationRules {
         rule {
             // Generic instruction coverage (default counter)
@@ -134,4 +131,5 @@ tasks.test {
         events ("passed", "skipped", "failed")
         showStandardStreams = true
     }
+}
 }
