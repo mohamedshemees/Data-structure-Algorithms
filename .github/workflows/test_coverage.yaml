@@ -17,7 +17,10 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        
+      - name: Debug print secret
+        run: echo "$KEYS_FILE"
+        env:
+          KEYS_FILE: ${{ secrets.KEYS_FILE }}
       - name: Restore test.properties
         run: echo "$KEYS_FILE" | base64 -d > keys.properties
         env:
