@@ -17,6 +17,7 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        
       - name: Debug print secret
         run: echo "$KEYS_FILE"
         env:
@@ -25,7 +26,10 @@ jobs:
         run: echo "$KEYS_FILE" | base64 -d > keys.properties
         env:
           KEYS_FILE: ${{ secrets.KEYS_FILE }}
-          
+      - name: Show project directory structure
+        run: |
+          pwd
+          ls -la
       - name: Print test.properties contents for debug
         run: cat keys.properties
       - name: Make gradlew executable
