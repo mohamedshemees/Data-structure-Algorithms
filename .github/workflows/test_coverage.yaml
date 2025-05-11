@@ -1,113 +1,155 @@
-name: Test Coverage Enforcement
+name: Test and Coverage Check
 
 on:
   pull_request:
     branches:
       - main
+      - develop
 
 jobs:
-  coverage-check:
+  checkout:
+    name: Checkout Code
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-
     steps:
-      # Step 1: Checkout the code
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Step 2: Cache Gradle dependencies
-      - name: Cache Gradle dependencies
-        uses: actions/cache@v3
-        with:
-          path: ~/.gradle/caches
-          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: |
-            gradle-${{ runner.os }}-
-
-      # Step 3: Cache xmlstarlet
-      - name: Cache xmlstarlet
-        uses: actions/cache@v3
-        with:
-          path: /usr/local/bin/xmlstarlet
-          key: xmlstarlet-${{ runner.os }}
-          restore-keys: |
-            xmlstarlet-${{ runner.os }}-
-
-      # Step 4: Install xmlstarlet if not present
-      - name: Install xmlstarlet if not present
+  restore-keys:
+    name: Restore keys.properties
+    runs-on: ubuntu-latest
+    needs: checkout
+    steps:
+      - name: Restore keys.properties
         run: |
-          if ! command -v xmlstarlet &> /dev/null; then
-            echo "xmlstarlet not found, installing..."
-            sudo apt-get install -y xmlstarlet
-          fi
+          echo "$KEYS_FILE" | base64 -d > keys.properties
+          echo "Decoded keys.properties content:"
+          cat keys.properties
+          echo "Current directory tree:"
+          tree -a -L 2 || ls -R
+        env:
+          KEYS_FILE: ${{ secrets.KEYS_FILE }}
 
-      # Step 5: Run tests and generate reports
-      - name: Run coverage check
-        id: coverage
+  build-and-test:
+    name: Build and Run Tests
+    runs-on: ubuntu-latest
+    needs: restore-keys
+    outputs:
+      test_result: ${{ steps.set_result.outputs.outcome }}
+    steps:
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: temurin
+
+      - name: Run tests
+        id: run_tests
+        continue-on-error: true
+        run: ./gradlew clean test jacocoTestReport
+
+      - name: Set test result output
+        id: set_result
+        run: echo "outcome=${{ steps.run_tests.outcome }}" >> $GITHUB_OUTPUT
+
+  handle-failures:
+    name: Handle Test Failures
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    if: needs.build-and-test.outputs.test_result != 'success'
+    steps:
+      - name: Comment on failure
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: "❌ **Tests failed. Please fix them before merging.**"
+            });
+            core.setFailed('Tests failed.')
+
+  check-coverage:
+    name: Check Coverage
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    if: needs.build-and-test.outputs.test_result == 'success'
+    outputs:
+      instruction: ${{ steps.extract.outputs.instruction }}
+      line: ${{ steps.extract.outputs.line }}
+      method: ${{ steps.extract.outputs.method }}
+      class: ${{ steps.extract.outputs.class }}
+    steps:
+      - name: Install xmllint
+        run: sudo apt-get install -y libxml2-utils
+
+      - name: Check coverage thresholds
+        id: extract
         run: |
-          # Run the tests and generate reports
-          ./gradlew clean test jacocoTestReport jacocoTestCoverageVerification
-
-          # Check if tests failed
-          TEST_FAILED=$(grep -i "FAILURE" build/reports/tests/test/index.html)
-
-          if [[ -n "$TEST_FAILED" ]]; then
-            # Comment if there are test failures
-            COMMENT="## Test Failures
-There are failing tests in this run. Please check the logs and fix the issues. ❌"
-            curl -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-              -d "{\"body\": \"$COMMENT\"}" \
-              "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments"
-            exit 1
-          fi
-
-          # If tests pass, proceed to check JaCoCo coverage
           REPORT_PATH="build/reports/jacoco/test/jacocoTestReport.xml"
           if [ ! -f "$REPORT_PATH" ]; then
-            echo "❌ JaCoCo report not found at $REPORT_PATH"
+            echo "❌ Coverage report not found."
             exit 1
           fi
 
-          # Extract coverage values (Line, Class, Branch)
-          COVERAGE_LINE=$(xmlstarlet sel -t -m "//counter[@type='LINE']" -v "@covered" "$REPORT_PATH")
-          COVERAGE_CLASS=$(xmlstarlet sel -t -m "//counter[@type='CLASS']" -v "@covered" "$REPORT_PATH")
-          COVERAGE_BRANCH=$(xmlstarlet sel -t -m "//counter[@type='BRANCH']" -v "@covered" "$REPORT_PATH")
+          extract_coverage() {
+            local type=$1
+            local covered=$(xmllint --xpath "string(//counter[@type='$type']/@covered)" "$REPORT_PATH")
+            local missed=$(xmllint --xpath "string(//counter[@type='$type']/@missed)" "$REPORT_PATH")
+            echo $(( (covered * 100) / (covered + missed) ))
+          }
 
-          # Comment with coverage data in a neat table
-          COMMENT="## JaCoCo Test Coverage Report
+          echo "instruction=$(extract_coverage INSTRUCTION)" >> $GITHUB_OUTPUT
+          echo "line=$(extract_coverage LINE)" >> $GITHUB_OUTPUT
+          echo "method=$(extract_coverage METHOD)" >> $GITHUB_OUTPUT
+          echo "class=$(extract_coverage CLASS)" >> $GITHUB_OUTPUT
 
-| Metric               | Percentage |
-|----------------------|------------|
-| **Line Coverage**     | **${COVERAGE_LINE}%**  |
-| **Class Coverage**    | **${COVERAGE_CLASS}%** |
-| **Branch Coverage**   | **${COVERAGE_BRANCH}%**|
-
-✅ Coverage meets the required 80% threshold. Great job!"
-
-          if [[ "$COVERAGE_LINE" -lt 80 ]]; then
-            COMMENT="## JaCoCo Test Coverage Report
-
-| Metric               | Percentage |
-|----------------------|------------|
-| **Line Coverage**     | **${COVERAGE_LINE}%**  |
-| **Class Coverage**    | **${COVERAGE_CLASS}%** |
-| **Branch Coverage**   | **${COVERAGE_BRANCH}%**|
-
-❌ Coverage below 80%. Please add more tests or improve coverage."
-
-          fi
-
-          # Create a comment on PR
-          curl -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            -d "{\"body\": \"$COMMENT\"}" \
-            "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments"
-
-      # Step 6: Upload coverage report (if needed)
-      - name: Upload coverage report
-        if: always()
-        uses: actions/upload-artifact@v4
+  comment-coverage:
+    name: Comment Coverage Results
+    runs-on: ubuntu-latest
+    needs: [build-and-test, check-coverage]
+    if: needs.build-and-test.outputs.test_result == 'success'
+    steps:
+      - name: Comment on coverage results
+        uses: actions/github-script@v7
         with:
-          name: coverage-report
-          path: build/reports/jacoco/test/html/
+          script: |
+            const instruction = Number('${{ needs.check-coverage.outputs.instruction }}');
+            const line = Number('${{ needs.check-coverage.outputs.line }}');
+            const method = Number('${{ needs.check-coverage.outputs.method }}');
+            const classCoverage = Number('${{ needs.check-coverage.outputs.class }}');
+            const artifactUrl = `https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}`;
+
+            let message = `
+            ## 📊 JaCoCo Coverage Report
+            | Metric               | Covered % |
+            |----------------------|-----------|
+            | Instruction Coverage | ${instruction}% |
+            | Line Coverage        | ${line}% |
+            | Method Coverage      | ${method}% |
+            | Class Coverage       | ${classCoverage}% |
+
+            [🔗 View Detailed Coverage Report](${artifactUrl})
+            `;
+
+            if (
+              instruction < 80 ||
+              line < 80 ||
+              method < 80 ||
+              classCoverage < 80
+            ) {
+              message += '\n❌ **Coverage below 80%, please improve it before merging.**';
+              core.setFailed('Coverage below 80%');
+            } else {
+              message += '\n✅ **Coverage meets minimum 80% requirement. Good job!**';
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: message
+            });
