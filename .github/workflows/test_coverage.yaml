@@ -7,31 +7,33 @@ on:
       - develop
 
 jobs:
-  test-and-coverage:
-    name: Run tests and verify coverage
+  checkout:
+    name: Checkout Code
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        
-      - name: Debug print secret
-        run: echo "$KEYS_FILE"
-        env:
-          KEYS_FILE: ${{ secrets.KEYS_FILE }}
-      - name: Restore test.properties
-        run: echo "$KEYS_FILE" | base64 -d > keys.properties
-        env:
-          KEYS_FILE: ${{ secrets.KEYS_FILE }}
-      - name: Show project directory structure
+
+  restore-keys:
+    name: Restore keys.properties
+    runs-on: ubuntu-latest
+    needs: checkout  # This ensures restore-keys runs after checkout
+    steps:
+      - name: Restore keys.properties
         run: |
-          pwd
-          ls -la
-      - name: Print test.properties contents for debug
-        run: cat keys.properties
+          echo "$KEYS_FILE" | base64 -d > keys.properties
+          echo "Decoded keys.properties content:"
+          cat keys.properties
+          echo "Current directory tree:"
+          tree -a -L 2 || ls -R
+        env:
+          KEYS_FILE: ${{ secrets.KEYS_FILE }}
+
+  build-and-test:
+    name: Build and Run Tests
+    runs-on: ubuntu-latest
+    needs: restore-keys  # This ensures build-and-test runs after restore-keys
+    steps:
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
@@ -47,8 +49,13 @@ jobs:
         run: |
           ./gradlew clean test jacocoTestReport
 
-      - name: Handle test failures
-        if: steps.run_tests.outcome != 'success'
+  handle-failures:
+    name: Handle Test Failures
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    if: steps.run_tests.outcome != 'success'  # This ensures this job only runs on failure
+    steps:
+      - name: Comment on failure
         uses: actions/github-script@v7
         with:
           script: |
@@ -60,8 +67,13 @@ jobs:
             });
             core.setFailed('Tests failed.')
 
+  upload-coverage-report:
+    name: Upload Coverage Report
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    if: steps.run_tests.outcome == 'success'  # This ensures this job only runs on success
+    steps:
       - name: Upload coverage report
-        if: steps.run_tests.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
@@ -69,12 +81,16 @@ jobs:
             build/reports/jacoco/test/html/
             build/reports/jacoco/test/jacocoTestReport.xml
 
+  check-coverage:
+    name: Check Coverage
+    runs-on: ubuntu-latest
+    needs: upload-coverage-report
+    if: steps.run_tests.outcome == 'success'  # Ensure it runs only after tests succeed
+    steps:
       - name: Install xmllint
-        if: steps.run_tests.outcome == 'success'
         run: sudo apt-get install -y libxml2-utils
 
-      - name: Check coverage
-        if: steps.run_tests.outcome == 'success'
+      - name: Check coverage thresholds
         id: check_coverage
         run: |
           REPORT_PATH="build/reports/jacoco/test/jacocoTestReport.xml"
@@ -101,8 +117,13 @@ jobs:
           echo "METHOD_COVERAGE=$METHOD_COVERAGE" >> $GITHUB_ENV
           echo "CLASS_COVERAGE=$CLASS_COVERAGE" >> $GITHUB_ENV
 
-      - name: Comment coverage result
-        if: steps.run_tests.outcome == 'success'
+  comment-coverage:
+    name: Comment Coverage Results
+    runs-on: ubuntu-latest
+    needs: check-coverage
+    if: steps.run_tests.outcome == 'success'  # Ensure it runs only after tests succeed
+    steps:
+      - name: Comment on coverage results
         uses: actions/github-script@v7
         with:
           script: |
