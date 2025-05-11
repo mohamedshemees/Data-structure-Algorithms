@@ -17,7 +17,7 @@ jobs:
   restore-keys:
     name: Restore keys.properties
     runs-on: ubuntu-latest
-    needs: checkout  # This ensures restore-keys runs after checkout
+    needs: checkout
     steps:
       - name: Restore keys.properties
         run: |
@@ -32,7 +32,9 @@ jobs:
   build-and-test:
     name: Build and Run Tests
     runs-on: ubuntu-latest
-    needs: restore-keys  # This ensures build-and-test runs after restore-keys
+    needs: restore-keys
+    outputs:
+      test_result: ${{ steps.set_result.outputs.outcome }}
     steps:
       - name: Make gradlew executable
         run: chmod +x ./gradlew
@@ -46,14 +48,17 @@ jobs:
       - name: Run tests
         id: run_tests
         continue-on-error: true
-        run: |
-          ./gradlew clean test jacocoTestReport
+        run: ./gradlew clean test jacocoTestReport
+
+      - name: Set test result output
+        id: set_result
+        run: echo "outcome=${{ steps.run_tests.outcome }}" >> $GITHUB_OUTPUT
 
   handle-failures:
     name: Handle Test Failures
     runs-on: ubuntu-latest
     needs: build-and-test
-    if: steps.run_tests.outcome != 'success'  # This ensures this job only runs on failure
+    if: needs.build-and-test.outputs.test_result != 'success'
     steps:
       - name: Comment on failure
         uses: actions/github-script@v7
@@ -67,36 +72,26 @@ jobs:
             });
             core.setFailed('Tests failed.')
 
-  upload-coverage-report:
-    name: Upload Coverage Report
-    runs-on: ubuntu-latest
-    needs: build-and-test
-    if: steps.run_tests.outcome == 'success'  # This ensures this job only runs on success
-    steps:
-      - name: Upload coverage report
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report
-          path: |
-            build/reports/jacoco/test/html/
-            build/reports/jacoco/test/jacocoTestReport.xml
-
   check-coverage:
     name: Check Coverage
     runs-on: ubuntu-latest
-    needs: upload-coverage-report
-    if: steps.run_tests.outcome == 'success'  # Ensure it runs only after tests succeed
+    needs: build-and-test
+    if: needs.build-and-test.outputs.test_result == 'success'
+    outputs:
+      instruction: ${{ steps.extract.outputs.instruction }}
+      line: ${{ steps.extract.outputs.line }}
+      method: ${{ steps.extract.outputs.method }}
+      class: ${{ steps.extract.outputs.class }}
     steps:
       - name: Install xmllint
         run: sudo apt-get install -y libxml2-utils
 
       - name: Check coverage thresholds
-        id: check_coverage
+        id: extract
         run: |
           REPORT_PATH="build/reports/jacoco/test/jacocoTestReport.xml"
           if [ ! -f "$REPORT_PATH" ]; then
             echo "❌ Coverage report not found."
-            echo "coverage_found=false" >> $GITHUB_ENV
             exit 1
           fi
 
@@ -107,30 +102,25 @@ jobs:
             echo $(( (covered * 100) / (covered + missed) ))
           }
 
-          INSTRUCTION_COVERAGE=$(extract_coverage "INSTRUCTION")
-          LINE_COVERAGE=$(extract_coverage "LINE")
-          METHOD_COVERAGE=$(extract_coverage "METHOD")
-          CLASS_COVERAGE=$(extract_coverage "CLASS")
-
-          echo "INSTRUCTION_COVERAGE=$INSTRUCTION_COVERAGE" >> $GITHUB_ENV
-          echo "LINE_COVERAGE=$LINE_COVERAGE" >> $GITHUB_ENV
-          echo "METHOD_COVERAGE=$METHOD_COVERAGE" >> $GITHUB_ENV
-          echo "CLASS_COVERAGE=$CLASS_COVERAGE" >> $GITHUB_ENV
+          echo "instruction=$(extract_coverage INSTRUCTION)" >> $GITHUB_OUTPUT
+          echo "line=$(extract_coverage LINE)" >> $GITHUB_OUTPUT
+          echo "method=$(extract_coverage METHOD)" >> $GITHUB_OUTPUT
+          echo "class=$(extract_coverage CLASS)" >> $GITHUB_OUTPUT
 
   comment-coverage:
     name: Comment Coverage Results
     runs-on: ubuntu-latest
-    needs: check-coverage
-    if: steps.run_tests.outcome == 'success'  # Ensure it runs only after tests succeed
+    needs: [build-and-test, check-coverage]
+    if: needs.build-and-test.outputs.test_result == 'success'
     steps:
       - name: Comment on coverage results
         uses: actions/github-script@v7
         with:
           script: |
-            const instruction = process.env.INSTRUCTION_COVERAGE;
-            const line = process.env.LINE_COVERAGE;
-            const method = process.env.METHOD_COVERAGE;
-            const classCoverage = process.env.CLASS_COVERAGE;
+            const instruction = Number('${{ needs.check-coverage.outputs.instruction }}');
+            const line = Number('${{ needs.check-coverage.outputs.line }}');
+            const method = Number('${{ needs.check-coverage.outputs.method }}');
+            const classCoverage = Number('${{ needs.check-coverage.outputs.class }}');
             const artifactUrl = `https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}`;
 
             let message = `
